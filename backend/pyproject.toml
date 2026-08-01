@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cashbook-backend"
+version = "0.1.0"
+description = "Cashbook API foundation"
+requires-python = ">=3.11"
+dependencies = [
+  "alembic==1.14.0",
+  "argon2-cffi==23.1.0",
+  "fastapi==0.115.6",
+  "psycopg[binary]==3.2.3",
+  "pydantic-settings==2.7.0",
+  "sentry-sdk[fastapi]==2.66.1",
+  "sqlalchemy==2.0.36",
+  "uvicorn[standard]==0.34.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx==0.28.1",
+  "pytest==8.3.4",
+  "pytest-cov==6.0.0",
+  "ruff==0.8.4",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --cov=app --cov-report=term-missing"
+markers = ["integration: requires TEST_DATABASE_URL and an isolated PostgreSQL database"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]  # Ruff's formatter owns line wrapping.
+
+[tool.ruff.format]
+quote-style = "double"
