@@ -51,6 +51,8 @@ export function AdminUsersPage() {
     email: string;
     value: string;
   } | null>(null);
+  const [isSeeding, setIsSeeding] = useState(false);
+  const [isClearingDemo, setIsClearingDemo] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -106,6 +108,78 @@ export function AdminUsersPage() {
     }
   }
 
+  async function seedMyAccount() {
+    if (
+      !window.confirm(
+        "Add realistic demo transactions and budgets to your administrator account? Existing data will not be replaced.",
+      )
+    ) {
+      return;
+    }
+    setIsSeeding(true);
+    setError(null);
+    try {
+      const result = await request<{
+        transactions_created: number;
+        budgets_created: number;
+        category_budgets_created: number;
+      }>("/admin/debug/seed-my-account", { method: "POST" });
+      const created =
+        result.transactions_created +
+        result.budgets_created +
+        result.category_budgets_created;
+      setNotice(
+        created
+          ? `Demo data added to your account: ${result.transactions_created} transactions, ${result.budgets_created} monthly budget, and ${result.category_budgets_created} category budgets.`
+          : "Your account already has this month's demo data.",
+      );
+    } catch (actionError) {
+      setError(
+        actionError instanceof Error
+          ? actionError.message
+          : "Unable to add demo data.",
+      );
+    } finally {
+      setIsSeeding(false);
+    }
+  }
+
+  async function clearMyDemoData() {
+    if (
+      !window.confirm(
+        "Remove all data created by the debugger from your administrator account? Your other records will be preserved.",
+      )
+    ) {
+      return;
+    }
+    setIsClearingDemo(true);
+    setError(null);
+    try {
+      const result = await request<{
+        transactions_deleted: number;
+        budgets_deleted: number;
+        category_budgets_deleted: number;
+      }>("/admin/debug/demo-data", { method: "DELETE" });
+      const deleted =
+        result.transactions_deleted +
+        result.budgets_deleted +
+        result.category_budgets_deleted;
+      setNotice(
+        deleted
+          ? `Demo data cleared: ${result.transactions_deleted} transactions, ${result.budgets_deleted} monthly budget, and ${result.category_budgets_deleted} category budgets removed.`
+          : "There is no debugger-created data to clear.",
+      );
+    } catch (actionError) {
+      setError(
+        actionError instanceof Error
+          ? actionError.message
+          : "Unable to clear demo data.",
+      );
+    } finally {
+      setIsClearingDemo(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="page-heading">
@@ -147,6 +221,38 @@ export function AdminUsersPage() {
           </button>
         </section>
       )}
+      <section
+        className="card admin-debug"
+        aria-labelledby="debug-tools-heading"
+      >
+        <div>
+          <p className="eyebrow">Debugger</p>
+          <h2 id="debug-tools-heading">Preview a filled cashbook</h2>
+          <p>
+            Add realistic transactions and budgets for the current month to your
+            administrator account. Existing records are preserved, and running
+            it again will not duplicate the demo data.
+          </p>
+        </div>
+        <div className="admin-debug-actions">
+          <button
+            className="secondary-button"
+            disabled={isSeeding || isClearingDemo}
+            onClick={() => void seedMyAccount()}
+            type="button"
+          >
+            {isSeeding ? "Adding demo data…" : "Fill my account with demo data"}
+          </button>
+          <button
+            className="text-button danger-button"
+            disabled={isSeeding || isClearingDemo}
+            onClick={() => void clearMyDemoData()}
+            type="button"
+          >
+            {isClearingDemo ? "Clearing demo data…" : "Clear demo data"}
+          </button>
+        </div>
+      </section>
       <section className="card admin-users" aria-label="User accounts">
         {!users.length && !error ? (
           <p className="empty-state">Loading users…</p>

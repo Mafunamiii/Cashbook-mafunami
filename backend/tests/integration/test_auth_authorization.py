@@ -8,7 +8,16 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import AuditEvent, Category, Transaction, TransactionType, User, UserRole
+from app.db.models import (
+    AuditEvent,
+    BudgetConfiguration,
+    Category,
+    CategoryBudget,
+    Transaction,
+    TransactionType,
+    User,
+    UserRole,
+)
 from app.db.models import Session as AuthSession
 
 pytestmark = pytest.mark.integration
@@ -471,6 +480,164 @@ def test_admin_account_management_is_role_guarded_and_never_returns_financial_da
         client.post(f"/api/v1/admin/users/{target.id}/sessions/revoke", headers=headers).status_code
         == 204
     )
+
+
+def test_admin_demo_data_is_self_scoped_and_idempotent(
+    client: TestClient, db_session: Session
+) -> None:
+    admin_data = register(client, "demo-admin@example.test", "Demo Administrator")
+    other_data = register(client, "demo-user@example.test", "Other User")
+
+    # An ordinary user cannot invoke the debugger action.
+    ordinary_headers = csrf_headers(client, other_data["csrf_token"])
+    assert (
+        client.post("/api/v1/admin/debug/seed-my-account", headers=ordinary_headers).status_code
+        == 403
+    )
+
+    administrator = db_session.get(User, uuid.UUID(admin_data["user"]["id"]))
+    assert administrator is not None
+    administrator.role = UserRole.ADMIN
+    db_session.commit()
+    admin_session = login(client, "demo-admin@example.test")
+    headers = csrf_headers(client, admin_session["csrf_token"])
+
+    seeded = client.post("/api/v1/admin/debug/seed-my-account", headers=headers)
+    assert seeded.status_code == 200, seeded.text
+    assert seeded.json() == {
+        "transactions_created": 16,
+        "budgets_created": 1,
+        "category_budgets_created": 7,
+    }
+
+    admin_id = administrator.id
+    other_id = uuid.UUID(other_data["user"]["id"])
+    assert (
+        len(list(db_session.scalars(select(Transaction).where(Transaction.user_id == admin_id))))
+        == 16
+    )
+    assert not list(db_session.scalars(select(Transaction).where(Transaction.user_id == other_id)))
+    assert db_session.scalar(
+        select(BudgetConfiguration.id).where(BudgetConfiguration.user_id == admin_id)
+    )
+    assert (
+        len(
+            list(
+                db_session.scalars(select(CategoryBudget).where(CategoryBudget.user_id == admin_id))
+            )
+        )
+        == 7
+    )
+
+    dashboard = client.get("/api/v1/dashboard")
+    assert dashboard.status_code == 200, dashboard.text
+    assert dashboard.json()["amount_minor"] == 6_500_000
+    assert dashboard.json()["total_inflow_minor"] > 0
+    assert dashboard.json()["total_outflow_minor"] > 0
+    assert dashboard.json()["category_spending"]
+
+    repeated = client.post("/api/v1/admin/debug/seed-my-account", headers=headers)
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json() == {
+        "transactions_created": 0,
+        "budgets_created": 0,
+        "category_budgets_created": 0,
+    }
+    assert (
+        len(list(db_session.scalars(select(Transaction).where(Transaction.user_id == admin_id))))
+        == 16
+    )
+    assert db_session.scalar(
+        select(AuditEvent.id).where(
+            AuditEvent.actor_user_id == admin_id,
+            AuditEvent.subject_user_id == admin_id,
+            AuditEvent.event_type == "admin.demo_data_seeded",
+        )
+    )
+
+    admin_category = category_of_type(db_session, str(admin_id), TransactionType.OUTFLOW)
+    manual = create_transaction(
+        client,
+        csrf_token=admin_session["csrf_token"],
+        category=admin_category,
+        name="Keep this manual transaction",
+        transaction_date=date.today().isoformat(),
+    )
+    cleared = client.delete("/api/v1/admin/debug/demo-data", headers=headers)
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json() == {
+        "transactions_deleted": 16,
+        "budgets_deleted": 1,
+        "category_budgets_deleted": 7,
+    }
+    assert client.get(f"/api/v1/transactions/{manual['id']}").status_code == 200
+    assert not list(
+        db_session.scalars(
+            select(BudgetConfiguration).where(BudgetConfiguration.user_id == admin_id)
+        )
+    )
+    assert not list(
+        db_session.scalars(select(CategoryBudget).where(CategoryBudget.user_id == admin_id))
+    )
+    cleared_again = client.delete("/api/v1/admin/debug/demo-data", headers=headers)
+    assert cleared_again.status_code == 200
+    assert cleared_again.json() == {
+        "transactions_deleted": 0,
+        "budgets_deleted": 0,
+        "category_budgets_deleted": 0,
+    }
+
+
+def test_regular_user_can_clear_only_their_own_transactions(
+    client: TestClient, db_session: Session
+) -> None:
+    user_a = register(client, "clear-a@example.test", "Clear A")
+    category_a = category_for(db_session, user_a["user"]["id"])
+    create_transaction(client, csrf_token=user_a["csrf_token"], category=category_a, name="A one")
+    create_transaction(client, csrf_token=user_a["csrf_token"], category=category_a, name="A two")
+
+    user_b = register(client, "clear-b@example.test", "Clear B")
+    category_b = category_for(db_session, user_b["user"]["id"])
+    create_transaction(client, csrf_token=user_b["csrf_token"], category=category_b, name="B one")
+
+    assert client.delete("/api/v1/transactions").status_code == 403
+    cleared_b = client.delete(
+        "/api/v1/transactions", headers=csrf_headers(client, user_b["csrf_token"])
+    )
+    assert cleared_b.status_code == 200, cleared_b.text
+    assert cleared_b.json() == {"transactions_deleted": 1}
+    assert not list(
+        db_session.scalars(
+            select(Transaction).where(Transaction.user_id == uuid.UUID(user_b["user"]["id"]))
+        )
+    )
+    assert (
+        len(
+            list(
+                db_session.scalars(
+                    select(Transaction).where(
+                        Transaction.user_id == uuid.UUID(user_a["user"]["id"])
+                    )
+                )
+            )
+        )
+        == 2
+    )
+
+    session_a = login(client, "clear-a@example.test")
+    cleared_a = client.delete(
+        "/api/v1/transactions", headers=csrf_headers(client, session_a["csrf_token"])
+    )
+    assert cleared_a.status_code == 200
+    assert cleared_a.json() == {"transactions_deleted": 2}
+    event = db_session.scalar(
+        select(AuditEvent).where(
+            AuditEvent.actor_user_id == uuid.UUID(user_a["user"]["id"]),
+            AuditEvent.event_type == "transaction.all_deleted",
+        )
+    )
+    assert event is not None
+    assert event.metadata_json == {"deleted_count": 2}
 
 
 def test_login_rate_limit_uses_generic_failure_message(client: TestClient) -> None:

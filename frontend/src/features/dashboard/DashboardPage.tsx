@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 
 import { AddTransaction } from "../transactions/AddTransaction";
+import { budgetProgress } from "./budgetProgress";
 
 type ReportingMode = "calendar_month" | "payday";
 
@@ -76,16 +77,6 @@ function nextDay(value: string) {
   return date.toISOString().slice(0, 10);
 }
 
-function progressClass(summary: Allocation) {
-  if (summary.remaining_minor === null) return "neutral";
-  if (summary.remaining_minor < 0) return "danger";
-  const percentage = Number(summary.usage_percent ?? 0);
-  if (percentage >= 90) return "danger";
-  if (percentage >= 75) return "warning";
-  if (percentage >= 50) return "caution";
-  return "safe";
-}
-
 export function DashboardPage({
   onViewRecords,
 }: {
@@ -140,6 +131,9 @@ export function DashboardPage({
   const activeCategory = chartData.find(
     (item) => item.category_id === selectedCategory,
   );
+  const overallBudgetProgress = dashboard
+    ? budgetProgress(dashboard)
+    : { percentage: 0, tone: "neutral" as const, label: "Loading budget" };
 
   return (
     <main className="app-shell dashboard-shell">
@@ -235,17 +229,26 @@ export function DashboardPage({
             : `of ${money(dashboard?.amount_minor ?? null)} total budget`}
         </p>
         <div
-          className={`depletion-track ${dashboard ? progressClass(dashboard) : "neutral"}`}
+          aria-label={overallBudgetProgress.label}
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={
+            dashboard?.amount_minor === null
+              ? undefined
+              : overallBudgetProgress.percentage
+          }
+          className={`depletion-track ${overallBudgetProgress.tone}`}
+          role="progressbar"
         >
           <span
             style={{
-              width: `${Math.min(100, Number(dashboard?.usage_percent ?? 0))}%`,
+              width: `${overallBudgetProgress.percentage}%`,
             }}
           />
         </div>
         <p className="budget-used-copy">
           {dashboard
-            ? `${money(dashboard.used_minor)} used`
+            ? `${money(dashboard.used_minor)} used · ${overallBudgetProgress.label}`
             : "Loading summary…"}
         </p>
       </section>
@@ -427,10 +430,10 @@ export function DashboardPage({
                     {money(item.used_minor)} / {money(item.amount_minor)}
                   </strong>
                 </p>
-                <div className={`depletion-track ${progressClass(item)}`}>
+                <div className={`depletion-track ${budgetProgress(item).tone}`}>
                   <span
                     style={{
-                      width: `${Math.min(100, Number(item.usage_percent ?? 0))}%`,
+                      width: `${budgetProgress(item).percentage}%`,
                     }}
                   />
                 </div>

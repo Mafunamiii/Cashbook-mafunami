@@ -98,6 +98,8 @@ export function RecordsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isClearingAll, setIsClearingAll] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const params = new URLSearchParams({
@@ -246,6 +248,43 @@ export function RecordsPage() {
     }
   }
 
+  async function clearAllTransactions() {
+    const confirmation = window.prompt(
+      "This permanently deletes every transaction in your account, including records hidden by filters. Type CLEAR ALL to continue.",
+    );
+    if (confirmation !== "CLEAR ALL") return;
+    setIsClearingAll(true);
+    setError(null);
+    try {
+      const csrf = csrfToken();
+      const response = await fetch(`${apiBaseUrl}/api/v1/transactions`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: csrf ? { "X-CSRF-Token": decodeURIComponent(csrf) } : {},
+      });
+      if (!response.ok) throw new Error("Unable to clear transactions.");
+      const result = (await response.json()) as {
+        transactions_deleted: number;
+      };
+      setEditor(null);
+      setPage(1);
+      setNotice(
+        result.transactions_deleted
+          ? `${result.transactions_deleted} transaction${result.transactions_deleted === 1 ? "" : "s"} deleted.`
+          : "There were no transactions to delete.",
+      );
+      await load();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to clear transactions.",
+      );
+    } finally {
+      setIsClearingAll(false);
+    }
+  }
+
   const editableCategories = categories.filter(
     (category) =>
       category.transaction_type === editor?.transaction_type &&
@@ -262,6 +301,14 @@ export function RecordsPage() {
             Every transaction, with a running net cash-flow balance.
           </p>
         </div>
+        <button
+          className="text-button danger-button"
+          disabled={isClearingAll}
+          onClick={() => void clearAllTransactions()}
+          type="button"
+        >
+          {isClearingAll ? "Clearing…" : "Clear all transactions"}
+        </button>
       </header>
 
       <section className="card records-filters" aria-label="Filter records">
@@ -362,6 +409,11 @@ export function RecordsPage() {
       {error && (
         <p className="form-error" role="alert">
           {error}
+        </p>
+      )}
+      {notice && (
+        <p className="notice" role="status">
+          {notice}
         </p>
       )}
       {isLoading ? (

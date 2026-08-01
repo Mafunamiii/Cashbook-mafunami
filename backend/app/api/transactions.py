@@ -8,12 +8,13 @@ from math import ceil
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
-from sqlalchemy import Select, case, func, or_, select
+from sqlalchemy import Select, case, delete, func, or_, select
 
 from app.api.dependencies import ActiveUser, CsrfProtectedUser, DatabaseSession, owned_by_user
 from app.api.schemas import (
     StatementTransactionResponse,
     TransactionCreateRequest,
+    TransactionDeletionResponse,
     TransactionPageResponse,
     TransactionResponse,
     TransactionUpdateRequest,
@@ -282,6 +283,33 @@ def list_transactions(
         total_pages=ceil(total / page_size) if total else 0,
         sort=sort,
     )
+
+
+@router.delete("", response_model=TransactionDeletionResponse)
+def delete_all_transactions(
+    request: Request,
+    current_user: CsrfProtectedUser,
+    db: DatabaseSession,
+) -> TransactionDeletionResponse:
+    """Delete every transaction owned by the caller and no other account."""
+    deleted_count = (
+        db.scalar(select(func.count(Transaction.id)).where(Transaction.user_id == current_user.id))
+        or 0
+    )
+    db.execute(delete(Transaction).where(Transaction.user_id == current_user.id))
+    db.add(
+        AuditEvent(
+            actor_user_id=current_user.id,
+            subject_user_id=current_user.id,
+            event_type="transaction.all_deleted",
+            resource_type="transaction",
+            metadata_json={"deleted_count": deleted_count},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent", "")[:512] or None,
+        )
+    )
+    db.commit()
+    return TransactionDeletionResponse(transactions_deleted=deleted_count)
 
 
 @router.get("/{transaction_id}", response_model=TransactionResponse)

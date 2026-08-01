@@ -1,12 +1,15 @@
-"""Minimal administrator-only account management.
+"""Administrator-only account management and self-scoped demo tooling.
 
-These endpoints intentionally expose no categories, budgets, transactions, or
-reports.  They operate solely on account and session state.
+User-management endpoints intentionally expose no financial information. The
+demo-data endpoint is additionally constrained to the requesting administrator:
+it accepts no target account identifier.
 """
 
 from __future__ import annotations
 
 import uuid
+from calendar import monthrange
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select, update
@@ -15,13 +18,60 @@ from app.api.dependencies import Administrator, DatabaseSession, require_csrf
 from app.api.schemas import (
     AccountStatusUpdateRequest,
     AdminUserResponse,
+    DebugClearResponse,
+    DebugSeedResponse,
     TemporaryPasswordResponse,
 )
 from app.core.security import generate_secret, hash_password, utc_now
-from app.db.models import AuditEvent, User
+from app.db.models import (
+    AuditEvent,
+    BudgetConfiguration,
+    Category,
+    CategoryBudget,
+    Transaction,
+    TransactionType,
+    User,
+)
 from app.db.models import Session as AuthSession
 
 router = APIRouter(prefix="/api/v1/admin", tags=["administration"])
+
+_DEMO_TRANSACTIONS = (
+    ("Monthly salary (Demo)", "Salary", TransactionType.INFLOW, 8_500_000, 1),
+    ("Freelance project (Demo)", "Freelance", TransactionType.INFLOW, 1_850_000, 8),
+    ("Weekly groceries (Demo)", "Groceries", TransactionType.OUTFLOW, 485_000, 2),
+    ("Electric bill (Demo)", "Bills", TransactionType.OUTFLOW, 312_500, 3),
+    ("Internet bill (Demo)", "Bills", TransactionType.OUTFLOW, 169_900, 4),
+    ("Lunch with friends (Demo)", "Dining", TransactionType.OUTFLOW, 128_000, 5),
+    ("Ride to work (Demo)", "Transport", TransactionType.OUTFLOW, 42_500, 6),
+    ("Pharmacy (Demo)", "Health", TransactionType.OUTFLOW, 86_000, 7),
+    ("Household supplies (Demo)", "Shopping", TransactionType.OUTFLOW, 214_000, 9),
+    ("Movie night (Demo)", "Entertainment", TransactionType.OUTFLOW, 95_000, 10),
+    ("Coffee and pastry (Demo)", "Dining", TransactionType.OUTFLOW, 36_500, 12),
+    ("Mobile plan (Demo)", "Bills", TransactionType.OUTFLOW, 99_900, 14),
+    ("Market groceries (Demo)", "Groceries", TransactionType.OUTFLOW, 376_000, 16),
+    ("Fuel top-up (Demo)", "Transport", TransactionType.OUTFLOW, 150_000, 18),
+    ("New work shoes (Demo)", "Shopping", TransactionType.OUTFLOW, 275_000, 20),
+    ("Weekend dinner (Demo)", "Dining", TransactionType.OUTFLOW, 182_000, 22),
+)
+
+_DEMO_CATEGORY_BUDGETS = {
+    "Groceries": 1_500_000,
+    "Dining": 800_000,
+    "Transport": 600_000,
+    "Bills": 1_400_000,
+    "Health": 500_000,
+    "Shopping": 800_000,
+    "Entertainment": 400_000,
+}
+
+
+def _demo_id(user_id: uuid.UUID, month_start: date, resource: str) -> uuid.UUID:
+    """Generate stable IDs so retrying the operation never duplicates demo rows."""
+    return uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"cashbook:demo:{user_id}:{month_start.isoformat()}:{resource}",
+    )
 
 
 def _audit(
@@ -146,3 +196,161 @@ def revoke_user_sessions(
     _revoke_sessions(db, target.id)
     _audit(db, "admin.sessions_revoked", administrator, target, request)
     db.commit()
+
+
+@router.post("/debug/seed-my-account", response_model=DebugSeedResponse)
+def seed_requesting_administrator(
+    request: Request,
+    administrator: Administrator,
+    db: DatabaseSession,
+    _: None = Depends(require_csrf),
+) -> DebugSeedResponse:
+    """Add a realistic, retry-safe current-month dataset to the caller only."""
+    today = date.today()
+    month_start = today.replace(day=1)
+    categories = {
+        (category.name, category.transaction_type): category
+        for category in db.scalars(select(Category).where(Category.user_id == administrator.id))
+    }
+    required = {(name, transaction_type) for _, name, transaction_type, _, _ in _DEMO_TRANSACTIONS}
+    missing = sorted(name for name, kind in required if (name, kind) not in categories)
+    if missing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Restore the preset categories before adding demo data: {', '.join(missing)}.",
+        )
+
+    budgets_created = 0
+    budget_id = _demo_id(administrator.id, month_start, "monthly-budget")
+    existing_budget = db.scalar(
+        select(BudgetConfiguration.id).where(
+            BudgetConfiguration.user_id == administrator.id,
+            BudgetConfiguration.month_start == month_start,
+        )
+    )
+    if existing_budget is None:
+        db.add(
+            BudgetConfiguration(
+                id=budget_id,
+                user_id=administrator.id,
+                month_start=month_start,
+                amount_minor=6_500_000,
+            )
+        )
+        budgets_created = 1
+
+    category_budgets_created = 0
+    for category_name, amount_minor in _DEMO_CATEGORY_BUDGETS.items():
+        category = categories[(category_name, TransactionType.OUTFLOW)]
+        existing = db.scalar(
+            select(CategoryBudget.id).where(
+                CategoryBudget.user_id == administrator.id,
+                CategoryBudget.category_id == category.id,
+                CategoryBudget.month_start == month_start,
+            )
+        )
+        if existing is None:
+            db.add(
+                CategoryBudget(
+                    id=_demo_id(administrator.id, month_start, f"category-budget:{category_name}"),
+                    user_id=administrator.id,
+                    category_id=category.id,
+                    month_start=month_start,
+                    amount_minor=amount_minor,
+                )
+            )
+            category_budgets_created += 1
+
+    transactions_created = 0
+    last_day = monthrange(today.year, today.month)[1]
+    for index, (name, category_name, transaction_type, amount_minor, preferred_day) in enumerate(
+        _DEMO_TRANSACTIONS
+    ):
+        transaction_id = _demo_id(administrator.id, month_start, f"transaction:{index}")
+        if db.get(Transaction, transaction_id) is not None:
+            continue
+        category = categories[(category_name, transaction_type)]
+        db.add(
+            Transaction(
+                id=transaction_id,
+                user_id=administrator.id,
+                category_id=category.id,
+                name=name,
+                transaction_type=transaction_type,
+                amount_minor=amount_minor,
+                transaction_date=date(
+                    today.year,
+                    today.month,
+                    min(preferred_day, today.day, last_day),
+                ),
+                notes="Generated by the administrator demo-data tool.",
+            )
+        )
+        transactions_created += 1
+
+    _audit(db, "admin.demo_data_seeded", administrator, administrator, request)
+    db.commit()
+    return DebugSeedResponse(
+        transactions_created=transactions_created,
+        budgets_created=budgets_created,
+        category_budgets_created=category_budgets_created,
+    )
+
+
+@router.delete("/debug/demo-data", response_model=DebugClearResponse)
+def clear_requesting_administrator_demo_data(
+    request: Request,
+    administrator: Administrator,
+    db: DatabaseSession,
+    _: None = Depends(require_csrf),
+) -> DebugClearResponse:
+    """Remove only rows whose stable IDs identify them as debugger-created."""
+    transactions = list(
+        db.scalars(select(Transaction).where(Transaction.user_id == administrator.id))
+    )
+    demo_transactions = []
+    for transaction in transactions:
+        month_start = transaction.transaction_date.replace(day=1)
+        if any(
+            transaction.id == _demo_id(administrator.id, month_start, f"transaction:{index}")
+            for index in range(len(_DEMO_TRANSACTIONS))
+        ):
+            demo_transactions.append(transaction)
+
+    budgets = list(
+        db.scalars(
+            select(BudgetConfiguration).where(BudgetConfiguration.user_id == administrator.id)
+        )
+    )
+    demo_budgets = [
+        budget
+        for budget in budgets
+        if budget.id == _demo_id(administrator.id, budget.month_start, "monthly-budget")
+    ]
+
+    category_budgets = list(
+        db.scalars(select(CategoryBudget).where(CategoryBudget.user_id == administrator.id))
+    )
+    demo_category_budgets = [
+        budget
+        for budget in category_budgets
+        if any(
+            budget.id
+            == _demo_id(
+                administrator.id,
+                budget.month_start,
+                f"category-budget:{category_name}",
+            )
+            for category_name in _DEMO_CATEGORY_BUDGETS
+        )
+    ]
+
+    for item in (*demo_transactions, *demo_category_budgets, *demo_budgets):
+        db.delete(item)
+    _audit(db, "admin.demo_data_cleared", administrator, administrator, request)
+    db.commit()
+    return DebugClearResponse(
+        transactions_deleted=len(demo_transactions),
+        budgets_deleted=len(demo_budgets),
+        category_budgets_deleted=len(demo_category_budgets),
+    )

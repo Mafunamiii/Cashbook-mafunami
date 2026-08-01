@@ -27,8 +27,8 @@ administration.
 3. Check service health:
 
    ```bash
-   curl http://127.0.0.1:8000/health
-   curl http://127.0.0.1:8000/ready
+   curl http://127.0.0.1:8002/health
+   curl http://127.0.0.1:8002/ready
    curl http://127.0.0.1:3004
    ```
 

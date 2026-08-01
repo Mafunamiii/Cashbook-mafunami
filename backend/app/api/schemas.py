@@ -105,6 +105,20 @@ class TemporaryPasswordResponse(BaseModel):
     temporary_password: str
 
 
+class DebugSeedResponse(BaseModel):
+    """Summary of demo records added to the requesting administrator's account."""
+
+    transactions_created: int
+    budgets_created: int
+    category_budgets_created: int
+
+
+class DebugClearResponse(BaseModel):
+    transactions_deleted: int
+    budgets_deleted: int
+    category_budgets_deleted: int
+
+
 class CategoryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -170,6 +184,10 @@ class TransactionPageResponse(BaseModel):
     total: int
     total_pages: int
     sort: Literal["newest", "oldest"]
+
+
+class TransactionDeletionResponse(BaseModel):
+    transactions_deleted: int
 
 
 class StatementTransactionResponse(TransactionResponse):
