@@ -3,10 +3,27 @@
 !.env.example
 !.env.production.example
 
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local logs and temporary files
+*.log
+*.tmp
+*.bak
+
 backend/.venv/
 backend/.pytest_cache/
 backend/.ruff_cache/
+backend/.mypy_cache/
+backend/.tox/
 backend/.coverage
+backend/coverage.xml
+backend/htmlcov/
 backend/*.egg-info/
 backend/__pycache__/
 backend/**/*.py[cod]
@@ -14,5 +31,14 @@ backend/**/*.py[cod]
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/
+frontend/*.tsbuildinfo
 
 postgres-data/
+backups/
+*.dump
+*.dump.gz
+*.dump.gz.sha256
+
+# Local TLS and SSH private-key material
+*.key
+*.pem
