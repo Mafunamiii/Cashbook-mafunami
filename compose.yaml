@@ -22,7 +22,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
       REGISTRATION_MODE: ${REGISTRATION_MODE:-invite_only}
       INITIAL_INVITE_CODE: ${INITIAL_INVITE_CODE:-}
-      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
       COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3004}
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
@@ -31,8 +31,10 @@ services:
       SENTRY_DSN: ${SENTRY_BACKEND_DSN:-}
       SENTRY_RELEASE: ${SENTRY_RELEASE:-}
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.05}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1,testserver,backend}
     ports:
-      - "127.0.0.1:${BACKEND_PORT:-8002}:8000"
+      #- "127.0.0.1:${BACKEND_PORT:-8002}:8000"
+      - "${BACKEND_PORT:-8002}:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -47,12 +49,15 @@ services:
   frontend:
     build:
       context: ./frontend
+      target: development
     environment:
-      VITE_API_BASE_URL: http://localhost:${BACKEND_PORT:-8002}
+      # Keep API requests same-origin; Vite proxies /api to the backend service.
+      VITE_API_BASE_URL: ""
       VITE_SENTRY_DSN: ${SENTRY_FRONTEND_DSN:-}
       VITE_SENTRY_RELEASE: ${SENTRY_RELEASE:-}
     ports:
-      - "127.0.0.1:${FRONTEND_PORT:-3004}:5173"
+      #- "127.0.0.1:${FRONTEND_PORT:-3004}:5173"
+      - "${FRONTEND_PORT:-3004}:5173"
     depends_on:
       backend:
         condition: service_healthy

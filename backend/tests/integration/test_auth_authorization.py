@@ -711,18 +711,21 @@ def test_budget_configuration_uses_outflows_and_reports_subdivision_warnings(
     assert budget.json()["used_minor"] == 12_000
     assert budget.json()["remaining_minor"] == 18_000
     assert budget.json()["allowances_match_budget"] is False
-    reporting_mode = client.put(
+    unavailable_payday = client.put(
         "/api/v1/budget-settings", json={"reporting_mode": "payday"}, headers=headers
     )
-    assert reporting_mode.status_code == 200
-    assert reporting_mode.json()["reporting_mode"] == "payday"
-
+    assert unavailable_payday.status_code == 422
     schedule = client.post(
         "/api/v1/budget-settings/payday-schedules",
         json={"first_day": 12, "second_day": 27, "effective_from": "2026-08-12"},
         headers=headers,
     )
     assert schedule.status_code == 201, schedule.text
+    reporting_mode = client.put(
+        "/api/v1/budget-settings", json={"reporting_mode": "payday"}, headers=headers
+    )
+    assert reporting_mode.status_code == 200
+    assert reporting_mode.json()["reporting_mode"] == "payday"
     for period_start, amount in (("2026-08-12", 15_000), ("2026-08-27", 15_000)):
         response = client.put(
             f"/api/v1/budgets/2026-08-01/allowances/{period_start}",

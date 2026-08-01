@@ -12,7 +12,7 @@ from collections.abc import Generator
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
@@ -27,6 +27,12 @@ def integration_url() -> str:
     url = os.environ.get("TEST_DATABASE_URL")
     if not url:
         pytest.skip("TEST_DATABASE_URL is required for PostgreSQL integration tests")
+    database_name = make_url(url).database or ""
+    if not database_name.lower().endswith("_test"):
+        pytest.fail(
+            "TEST_DATABASE_URL must target a database whose name ends in '_test'; "
+            f"refusing destructive test setup for {database_name!r}"
+        )
     return url
 
 

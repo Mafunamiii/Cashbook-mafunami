@@ -53,6 +53,11 @@ class AppearancePreference(str, enum.Enum):
     LIGHT = "light"
 
 
+def enum_values(enum_class: type[enum.Enum]) -> list[str]:
+    """Persist string enum values, matching the lowercase PostgreSQL types."""
+    return [str(member.value) for member in enum_class]
+
+
 class Timestamped:
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -70,7 +75,9 @@ class User(Timestamped, Base):
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     role: Mapped[UserRole] = mapped_column(
-        Enum(UserRole, name="user_role"), nullable=False, default=UserRole.USER
+        Enum(UserRole, name="user_role", values_callable=enum_values),
+        nullable=False,
+        default=UserRole.USER,
     )
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
     must_change_password: Mapped[bool] = mapped_column(nullable=False, default=False)
@@ -132,7 +139,7 @@ class Category(Timestamped, Base):
     color: Mapped[str] = mapped_column(String(32), nullable=False)
     icon: Mapped[str | None] = mapped_column(String(64))
     transaction_type: Mapped[TransactionType] = mapped_column(
-        Enum(TransactionType, name="transaction_type"), nullable=False
+        Enum(TransactionType, name="transaction_type", values_callable=enum_values), nullable=False
     )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -162,7 +169,13 @@ class Transaction(Timestamped, Base):
     category_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     transaction_type: Mapped[TransactionType] = mapped_column(
-        Enum(TransactionType, name="transaction_type", create_type=False), nullable=False
+        Enum(
+            TransactionType,
+            name="transaction_type",
+            create_type=False,
+            values_callable=enum_values,
+        ),
+        nullable=False,
     )
     amount_minor: Mapped[int] = mapped_column(BIGINT, nullable=False)
     transaction_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -280,12 +293,16 @@ class UserPreferences(Timestamped, Base):
     currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default="PHP")
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Manila")
     reporting_mode: Mapped[ReportingMode] = mapped_column(
-        Enum(ReportingMode, name="reporting_mode"),
+        Enum(ReportingMode, name="reporting_mode", values_callable=enum_values),
         nullable=False,
         default=ReportingMode.CALENDAR_MONTH,
     )
     appearance_preference: Mapped[AppearancePreference] = mapped_column(
-        Enum(AppearancePreference, name="appearance_preference"),
+        Enum(
+            AppearancePreference,
+            name="appearance_preference",
+            values_callable=enum_values,
+        ),
         nullable=False,
         default=AppearancePreference.SYSTEM,
     )

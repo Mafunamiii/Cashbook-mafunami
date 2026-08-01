@@ -148,7 +148,7 @@ export function CategoriesPage() {
     <main className="app-shell">
       <header className="page-heading">
         <div>
-          <p className="eyebrow">Cashbook</p>
+          <p className="eyebrow">NamiCash by Mafunami</p>
           <h1>Categories</h1>
           <p className="page-intro">
             Organize where money comes from and where it goes.

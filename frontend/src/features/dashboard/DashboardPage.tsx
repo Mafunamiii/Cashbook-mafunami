@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 
+import { apiRequest } from "../../api";
 import { AddTransaction } from "../transactions/AddTransaction";
 
 type ReportingMode = "calendar_month" | "payday";
@@ -38,12 +39,11 @@ type Dashboard = Allocation & {
   total_outflow_minor: number;
   net_profit_loss_minor: number;
   payday_is_configured: boolean;
+  payday_is_enabled: boolean;
   category_spending: Category[];
   category_budgets: Category[];
   recent_transactions: RecentTransaction[];
 };
-
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 
 function localToday() {
   const now = new Date();
@@ -87,14 +87,19 @@ function progressClass(summary: Allocation) {
 }
 
 export function DashboardPage({
+  displayName,
+  onBudgetSettings,
   onViewRecords,
 }: {
+  displayName: string;
+  onBudgetSettings?: () => void;
   onViewRecords?: () => void;
 }) {
   const [anchorDate, setAnchorDate] = useState(localToday);
   const [mode, setMode] = useState<ReportingMode>("calendar_month");
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [isCycleOpen, setIsCycleOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -103,11 +108,7 @@ export function DashboardPage({
       period_mode: mode,
     });
     try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/dashboard?${params}`, {
-        credentials: "include",
-      });
-      if (!response.ok) throw new Error("Unable to load the dashboard.");
-      const payload = (await response.json()) as Dashboard;
+      const payload = await apiRequest<Dashboard>(`/dashboard?${params}`);
       setDashboard(payload);
       setMode(payload.period_mode);
       setError(null);
@@ -145,17 +146,27 @@ export function DashboardPage({
     <main className="app-shell dashboard-shell">
       <header className="dashboard-heading">
         <div>
-          <p className="eyebrow">Cashbook</p>
-          <h1>Money, in focus.</h1>
-          <p className="page-intro">
-            A calm view of your current spending cycle.
-          </p>
+          <p className="eyebrow">NamiCash by Mafunami</p>
+          <h1>Welcome {displayName}</h1>
         </div>
-        <AddTransaction onSaved={load} />
+        <div className="dashboard-actions">
+          <button
+            aria-controls="dashboard-cycle-control"
+            aria-expanded={isCycleOpen}
+            className="button secondary cycle-toggle"
+            onClick={() => setIsCycleOpen((open) => !open)}
+            type="button"
+          >
+            Cycle
+            <span aria-hidden="true">{isCycleOpen ? "−" : "+"}</span>
+          </button>
+          <AddTransaction onSaved={load} />
+        </div>
       </header>
 
       <section
-        className="period-control card"
+        className={`period-control card ${isCycleOpen ? "mobile-expanded" : ""}`}
+        id="dashboard-cycle-control"
         aria-label="Selected reporting period"
       >
         <div className="period-mode" role="group" aria-label="Period type">
@@ -166,13 +177,15 @@ export function DashboardPage({
           >
             Month
           </button>
-          <button
-            className={mode === "payday" ? "active" : ""}
-            onClick={() => setMode("payday")}
-            type="button"
-          >
-            Payday
-          </button>
+          {dashboard?.payday_is_enabled && (
+            <button
+              className={mode === "payday" ? "active" : ""}
+              onClick={() => setMode("payday")}
+              type="button"
+            >
+              Payday
+            </button>
+          )}
         </div>
         <div className="period-picker">
           <button
@@ -202,9 +215,13 @@ export function DashboardPage({
       </section>
 
       {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
+        <section className="card dashboard-error" role="alert">
+          <h2>Dashboard unavailable</h2>
+          <p>{error}</p>
+          <button className="button" type="button" onClick={() => void load()}>
+            Try again
+          </button>
+        </section>
       )}
       {!dashboard && !error && (
         <div
@@ -216,228 +233,238 @@ export function DashboardPage({
           <span className="sr-only">Loading dashboard summary…</span>
         </div>
       )}
-      {dashboard &&
-        !dashboard.payday_is_configured &&
-        mode === "calendar_month" && (
-          <p className="notice">
-            Set payday cutoffs in Budget settings to view payday segments.
-          </p>
-        )}
-
-      <section className="budget-hero card" aria-labelledby="remaining-budget">
-        <p className="eyebrow">Remaining budget</p>
-        <h2 id="remaining-budget">
-          {dashboard ? money(dashboard.remaining_minor) : "—"}
-        </h2>
-        <p>
-          {dashboard?.amount_minor === null
-            ? "Set a budget to track progress."
-            : `of ${money(dashboard?.amount_minor ?? null)} total budget`}
-        </p>
-        <div
-          className={`depletion-track ${dashboard ? progressClass(dashboard) : "neutral"}`}
-        >
-          <span
-            style={{
-              width: `${Math.min(100, Number(dashboard?.usage_percent ?? 0))}%`,
-            }}
-          />
-        </div>
-        <p className="budget-used-copy">
-          {dashboard
-            ? `${money(dashboard.used_minor)} used`
-            : "Loading summary…"}
-        </p>
-      </section>
-
-      <section className="summary-grid" aria-label="Financial summary">
-        <SummaryCard
-          label="Inflow"
-          value={dashboard ? money(dashboard.total_inflow_minor) : "—"}
-          tone="inflow"
-        />
-        <SummaryCard
-          label="Outflow"
-          value={dashboard ? money(dashboard.total_outflow_minor) : "—"}
-          tone="outflow"
-        />
-        <SummaryCard
-          label="Profit / loss"
-          value={dashboard ? signedMoney(dashboard.net_profit_loss_minor) : "—"}
-          tone={
-            dashboard && dashboard.net_profit_loss_minor < 0
-              ? "outflow"
-              : "inflow"
-          }
-        />
-        <SummaryCard
-          label="Budget used"
-          value={
-            dashboard?.usage_percent
-              ? `${Number(dashboard.usage_percent).toFixed(0)}%`
-              : "—"
-          }
-          tone="neutral"
-        />
-      </section>
-
-      <section className="dashboard-grid">
-        <section
-          className="card dashboard-panel spending-panel"
-          aria-labelledby="spending-heading"
-        >
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Outflow mix</p>
-              <h2 id="spending-heading">Spending by category</h2>
-            </div>
-          </div>
-          {chartData.length ? (
-            <>
-              <div className="chart-wrap" aria-hidden="true">
-                <ResponsiveContainer height="100%" width="100%">
-                  <PieChart>
-                    <Pie
-                      data={chartData}
-                      dataKey="value"
-                      innerRadius="62%"
-                      outerRadius="88%"
-                      paddingAngle={3}
-                      onClick={(_, index) =>
-                        setSelectedCategory(
-                          chartData[index]?.category_id ?? null,
-                        )
-                      }
-                    >
-                      {chartData.map((entry) => (
-                        <Cell
-                          fill={entry.category_color}
-                          key={entry.category_id}
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<ChartTooltip />} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <p className="chart-selected" aria-live="polite">
-                {activeCategory
-                  ? `${activeCategory.category_name}: ${money(activeCategory.used_minor)} (${activeCategory.percentage.toFixed(1)}%)`
-                  : "Hover or tap a segment for details."}
-              </p>
-              <ul
-                className="chart-summary"
-                aria-label="Outflow category summary"
+      {dashboard && (
+        <>
+          <section
+            className="budget-hero card"
+            aria-labelledby="remaining-budget"
+          >
+            <p className="eyebrow">Remaining budget</p>
+            <h2 id="remaining-budget">
+              {dashboard ? money(dashboard.remaining_minor) : "—"}
+            </h2>
+            <p>
+              {dashboard.amount_minor === null
+                ? "Add your first monthly budget to start tracking progress."
+                : `of ${money(dashboard?.amount_minor ?? null)} total budget`}
+            </p>
+            {dashboard.amount_minor === null && (
+              <button
+                className="button budget-cta"
+                type="button"
+                onClick={onBudgetSettings}
               >
-                {chartData.map((item) => (
-                  <li key={item.category_id}>
-                    <button
-                      aria-pressed={item.category_id === selectedCategory}
-                      onClick={() => setSelectedCategory(item.category_id)}
-                      type="button"
-                    >
+                Set monthly budget
+              </button>
+            )}
+            <div
+              className={`depletion-track ${dashboard ? progressClass(dashboard) : "neutral"}`}
+            >
+              <span
+                style={{
+                  width: `${Math.min(100, Number(dashboard?.usage_percent ?? 0))}%`,
+                }}
+              />
+            </div>
+            <p className="budget-used-copy">
+              {dashboard
+                ? `${money(dashboard.used_minor)} used`
+                : "Loading summary…"}
+            </p>
+          </section>
+
+          <section className="summary-grid" aria-label="Financial summary">
+            <SummaryCard
+              label="Inflow"
+              value={dashboard ? money(dashboard.total_inflow_minor) : "—"}
+              tone="inflow"
+            />
+            <SummaryCard
+              label="Outflow"
+              value={dashboard ? money(dashboard.total_outflow_minor) : "—"}
+              tone="outflow"
+            />
+            <SummaryCard
+              label="Profit / loss"
+              value={
+                dashboard ? signedMoney(dashboard.net_profit_loss_minor) : "—"
+              }
+              tone={
+                dashboard && dashboard.net_profit_loss_minor < 0
+                  ? "outflow"
+                  : "inflow"
+              }
+            />
+            <SummaryCard
+              label="Budget used"
+              value={
+                dashboard?.usage_percent
+                  ? `${Number(dashboard.usage_percent).toFixed(0)}%`
+                  : "—"
+              }
+              tone="neutral"
+            />
+          </section>
+
+          <section className="dashboard-grid">
+            <section
+              className="card dashboard-panel spending-panel"
+              aria-labelledby="spending-heading"
+            >
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Outflow mix</p>
+                  <h2 id="spending-heading">Spending by category</h2>
+                </div>
+              </div>
+              {chartData.length ? (
+                <>
+                  <div className="chart-wrap" aria-hidden="true">
+                    <ResponsiveContainer height="100%" width="100%">
+                      <PieChart>
+                        <Pie
+                          data={chartData}
+                          dataKey="value"
+                          innerRadius="62%"
+                          outerRadius="88%"
+                          paddingAngle={3}
+                          onClick={(_, index) =>
+                            setSelectedCategory(
+                              chartData[index]?.category_id ?? null,
+                            )
+                          }
+                        >
+                          {chartData.map((entry) => (
+                            <Cell
+                              fill={entry.category_color}
+                              key={entry.category_id}
+                            />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<ChartTooltip />} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <p className="chart-selected" aria-live="polite">
+                    {activeCategory
+                      ? `${activeCategory.category_name}: ${money(activeCategory.used_minor)} (${activeCategory.percentage.toFixed(1)}%)`
+                      : "Hover or tap a segment for details."}
+                  </p>
+                  <ul
+                    className="chart-summary"
+                    aria-label="Outflow category summary"
+                  >
+                    {chartData.map((item) => (
+                      <li key={item.category_id}>
+                        <button
+                          aria-pressed={item.category_id === selectedCategory}
+                          onClick={() => setSelectedCategory(item.category_id)}
+                          type="button"
+                        >
+                          <span
+                            className="category-dot"
+                            style={{ background: item.category_color }}
+                          />
+                          <span>{item.category_name}</span>
+                          <strong>{money(item.used_minor)}</strong>
+                          <small>{item.percentage.toFixed(1)}%</small>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p className="empty-state">
+                  No outflow transactions in this period yet.
+                </p>
+              )}
+            </section>
+
+            <section
+              className="card dashboard-panel recent-panel"
+              aria-labelledby="recent-heading"
+            >
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Recent activity</p>
+                  <h2 id="recent-heading">Latest transactions</h2>
+                </div>
+                <button
+                  className="records-link"
+                  onClick={onViewRecords}
+                  type="button"
+                >
+                  View all records
+                </button>
+              </div>
+              {dashboard?.recent_transactions.length ? (
+                <ul className="recent-list">
+                  {dashboard.recent_transactions.map((item) => (
+                    <li key={item.id}>
                       <span
                         className="category-dot"
                         style={{ background: item.category_color }}
                       />
-                      <span>{item.category_name}</span>
-                      <strong>{money(item.used_minor)}</strong>
-                      <small>{item.percentage.toFixed(1)}%</small>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <p className="empty-state">
-              No outflow transactions in this period yet.
-            </p>
-          )}
-        </section>
-
-        <section
-          className="card dashboard-panel recent-panel"
-          aria-labelledby="recent-heading"
-        >
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Recent activity</p>
-              <h2 id="recent-heading">Latest transactions</h2>
-            </div>
-            <button
-              className="records-link"
-              onClick={onViewRecords}
-              type="button"
-            >
-              View all records
-            </button>
-          </div>
-          {dashboard?.recent_transactions.length ? (
-            <ul className="recent-list">
-              {dashboard.recent_transactions.map((item) => (
-                <li key={item.id}>
-                  <span
-                    className="category-dot"
-                    style={{ background: item.category_color }}
-                  />
-                  <div>
-                    <strong>{item.name}</strong>
-                    <small>
-                      {item.category_name} · {item.transaction_date}
-                    </small>
-                  </div>
-                  <b className={item.transaction_type}>
-                    {item.transaction_type === "inflow" ? "+" : "−"}
-                    {money(item.amount_minor)}
-                  </b>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="empty-state">
-              Your latest transactions will appear here.
-            </p>
-          )}
-        </section>
-      </section>
-
-      {dashboard && dashboard.category_budgets.length > 0 && (
-        <section
-          className="card dashboard-panel category-budget-panel"
-          aria-labelledby="category-budget-heading"
-        >
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Optional allocations</p>
-              <h2 id="category-budget-heading">Category budgets</h2>
-            </div>
-          </div>
-          <div className="category-progress-list">
-            {dashboard.category_budgets.map((item) => (
-              <div key={item.category_id}>
-                <p>
-                  <span>
-                    <i
-                      className="category-dot"
-                      style={{ background: item.category_color }}
-                    />
-                    {item.category_name}
-                  </span>
-                  <strong>
-                    {money(item.used_minor)} / {money(item.amount_minor)}
-                  </strong>
+                      <div>
+                        <strong>{item.name}</strong>
+                        <small>
+                          {item.category_name} · {item.transaction_date}
+                        </small>
+                      </div>
+                      <b className={item.transaction_type}>
+                        {item.transaction_type === "inflow" ? "+" : "−"}
+                        {money(item.amount_minor)}
+                      </b>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="empty-state">
+                  Your latest transactions will appear here.
                 </p>
-                <div className={`depletion-track ${progressClass(item)}`}>
-                  <span
-                    style={{
-                      width: `${Math.min(100, Number(item.usage_percent ?? 0))}%`,
-                    }}
-                  />
+              )}
+            </section>
+          </section>
+
+          {dashboard && dashboard.category_budgets.length > 0 && (
+            <section
+              className="card dashboard-panel category-budget-panel"
+              aria-labelledby="category-budget-heading"
+            >
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Optional allocations</p>
+                  <h2 id="category-budget-heading">Category budgets</h2>
                 </div>
               </div>
-            ))}
-          </div>
-        </section>
+              <div className="category-progress-list">
+                {dashboard.category_budgets.map((item) => (
+                  <div key={item.category_id}>
+                    <p>
+                      <span>
+                        <i
+                          className="category-dot"
+                          style={{ background: item.category_color }}
+                        />
+                        {item.category_name}
+                      </span>
+                      <strong>
+                        {money(item.used_minor)} / {money(item.amount_minor)}
+                      </strong>
+                    </p>
+                    <div className={`depletion-track ${progressClass(item)}`}>
+                      <span
+                        style={{
+                          width: `${Math.min(100, Number(item.usage_percent ?? 0))}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </>
       )}
     </main>
   );

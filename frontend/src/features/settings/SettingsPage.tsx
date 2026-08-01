@@ -245,12 +245,9 @@ export function SettingsPage({
               <h2>Budget configuration</h2>
             </div>
             <p className="hint">
-              Current reporting mode:{" "}
               {settings.reporting_mode === "payday"
-                ? "Payday segments"
-                : "Calendar month"}
-              . Configure mode, historical payday cutoffs, allowances, and
-              category sub-budgets in the budget settings area.
+                ? "Payday budgeting is enabled. Manage its schedule and allowances alongside your monthly budget."
+                : "Set your monthly budget and optional category allocations. Payday budgeting is available as an optional feature."}
             </p>
             <button
               className="button secondary-button"

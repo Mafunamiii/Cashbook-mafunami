@@ -83,10 +83,22 @@ function money(value: number | null): string {
       }).format(value / 100);
 }
 
+function majorAmount(value: number | null): string {
+  return value === null ? "" : (value / 100).toFixed(2);
+}
+
+function toMinorUnits(value: string): number | null {
+  if (!/^\d+(\.\d{1,2})?$/.test(value.trim())) return null;
+  const result = Math.round(Number(value) * 100);
+  return Number.isSafeInteger(result) ? result : null;
+}
+
 export function BudgetSettingsPage() {
   const [monthStart, setMonthStart] = useState(thisMonth);
   const [cycle, setCycle] = useState<Cycle | null>(null);
   const [mode, setMode] = useState<ReportingMode>("calendar_month");
+  const [paydaySchedule, setPaydaySchedule] = useState<Schedule | null>(null);
+  const [showPaydaySettings, setShowPaydaySettings] = useState(false);
   const [amount, setAmount] = useState("");
   const [firstDay, setFirstDay] = useState("12");
   const [secondDay, setSecondDay] = useState("27");
@@ -96,12 +108,17 @@ export function BudgetSettingsPage() {
   const load = useCallback(async () => {
     try {
       const [settings, currentCycle] = await Promise.all([
-        request<{ reporting_mode: ReportingMode }>("/budget-settings"),
+        request<{
+          reporting_mode: ReportingMode;
+          payday_schedule: Schedule | null;
+        }>("/budget-settings"),
         request<Cycle>(`/budgets/${monthStart}`),
       ]);
       setMode(settings.reporting_mode);
+      setPaydaySchedule(settings.payday_schedule);
+      if (settings.reporting_mode === "payday") setShowPaydaySettings(true);
       setCycle(currentCycle);
-      setAmount(currentCycle.amount_minor?.toString() ?? "");
+      setAmount(majorAmount(currentCycle.amount_minor));
       setNotice(null);
     } catch (error) {
       setNotice(
@@ -119,9 +136,11 @@ export function BudgetSettingsPage() {
 
   async function saveBudget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const amountMinor = Number(amount);
-    if (!Number.isSafeInteger(amountMinor) || amountMinor < 0) {
-      setNotice("Enter a whole, non-negative amount in minor units.");
+    const amountMinor = toMinorUnits(amount);
+    if (amountMinor === null) {
+      setNotice(
+        "Enter a non-negative peso amount with up to two decimal places.",
+      );
       return;
     }
     try {
@@ -167,9 +186,11 @@ export function BudgetSettingsPage() {
           effective_from: effectiveFrom,
         }),
       });
-      setNotice(
-        "A new payday schedule version was saved. Earlier cycles are unchanged.",
-      );
+      await request("/budget-settings", {
+        method: "PUT",
+        body: JSON.stringify({ reporting_mode: "payday" }),
+      });
+      setNotice("Payday budgeting enabled. Earlier cycles are unchanged.");
       await load();
     } catch (error) {
       setNotice(
@@ -181,10 +202,15 @@ export function BudgetSettingsPage() {
   }
 
   async function saveAllowance(periodStart: string, amountMinor: string) {
+    const parsedAmount = toMinorUnits(amountMinor);
+    if (parsedAmount === null)
+      return setNotice(
+        "Enter a valid peso amount with up to two decimal places.",
+      );
     try {
       await request(`/budgets/${monthStart}/allowances/${periodStart}`, {
         method: "PUT",
-        body: JSON.stringify({ amount_minor: Number(amountMinor) }),
+        body: JSON.stringify({ amount_minor: parsedAmount }),
       });
       setNotice("Payday allowance saved.");
       await load();
@@ -196,10 +222,15 @@ export function BudgetSettingsPage() {
   }
 
   async function saveCategoryBudget(categoryId: string, amountMinor: string) {
+    const parsedAmount = toMinorUnits(amountMinor);
+    if (parsedAmount === null)
+      return setNotice(
+        "Enter a valid peso amount with up to two decimal places.",
+      );
     try {
       await request(`/budgets/${monthStart}/categories/${categoryId}`, {
         method: "PUT",
-        body: JSON.stringify({ amount_minor: Number(amountMinor) }),
+        body: JSON.stringify({ amount_minor: parsedAmount }),
       });
       setNotice("Category allocation saved.");
       await load();
@@ -216,7 +247,7 @@ export function BudgetSettingsPage() {
     <main className="app-shell">
       <header className="page-heading">
         <div>
-          <p className="eyebrow">Cashbook</p>
+          <p className="eyebrow">NamiCash by Mafunami</p>
           <h1>Budget settings</h1>
           <p className="page-intro">
             Set the monthly spending envelope and its non-additive subdivisions.
@@ -243,13 +274,13 @@ export function BudgetSettingsPage() {
             />
           </label>
           <label>
-            Overall budget <span className="hint">minor units</span>
+            Overall budget <span className="hint">PHP</span>
             <input
-              inputMode="numeric"
-              pattern="[0-9]*"
+              inputMode="decimal"
+              pattern="[0-9]+([.][0-9]{1,2})?"
               value={amount}
               onChange={(event) => setAmount(event.target.value)}
-              placeholder="e.g. 300000"
+              placeholder="e.g. 3000.00"
               required
             />
           </label>
@@ -264,124 +295,6 @@ export function BudgetSettingsPage() {
             </p>
           )}
         </form>
-
-        <section className="card budget-panel">
-          <div className="section-heading">
-            <p className="eyebrow">Reporting</p>
-            <h2>Budget mode</h2>
-          </div>
-          <div className="transaction-type-switch">
-            <button
-              className={`type-option ${mode === "calendar_month" ? "selected" : ""}`}
-              onClick={() => void saveMode("calendar_month")}
-              type="button"
-            >
-              Calendar month
-            </button>
-            <button
-              className={`type-option ${mode === "payday" ? "selected" : ""}`}
-              onClick={() => void saveMode("payday")}
-              type="button"
-            >
-              Payday segments
-            </button>
-          </div>
-          <p className="hint">
-            The overall budget remains a monthly envelope; payday allowances
-            divide it without adding money.
-          </p>
-        </section>
-
-        <form className="card category-form" onSubmit={saveSchedule}>
-          <div className="section-heading">
-            <p className="eyebrow">Payday</p>
-            <h2>Cutoff schedule</h2>
-          </div>
-          <label>
-            First cutoff
-            <input
-              min="1"
-              max="31"
-              type="number"
-              value={firstDay}
-              onChange={(event) => setFirstDay(event.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Second cutoff
-            <input
-              min="1"
-              max="31"
-              type="number"
-              value={secondDay}
-              onChange={(event) => setSecondDay(event.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Effective from <span className="hint">must be a period start</span>
-            <input
-              type="date"
-              value={effectiveFrom}
-              onChange={(event) => setEffectiveFrom(event.target.value)}
-              required
-            />
-          </label>
-          <button className="button" type="submit">
-            Add schedule version
-          </button>
-          {cycle?.payday_schedule && (
-            <p className="hint">
-              Viewing {cycle.payday_schedule.first_day}th /{" "}
-              {cycle.payday_schedule.second_day}th cutoffs, effective{" "}
-              {cycle.payday_schedule.effective_from}.
-            </p>
-          )}
-        </form>
-
-        <section className="card budget-panel">
-          <div className="section-heading">
-            <p className="eyebrow">Allocations</p>
-            <h2>Payday allowances</h2>
-          </div>
-          {cycle?.allowances_match_budget === false && (
-            <p className="budget-warning" role="alert">
-              Configured segment allowances (
-              {money(cycle.allowances_total_minor)}) do not equal the overall
-              budget.
-            </p>
-          )}
-          {cycle?.payday_allowances.map((allowance) => (
-            <form
-              className="allocation-row"
-              key={allowance.period_start}
-              onSubmit={(event) => {
-                event.preventDefault();
-                void saveAllowance(
-                  allowance.period_start,
-                  new FormData(event.currentTarget).get("amount") as string,
-                );
-              }}
-            >
-              <span>
-                {allowance.period_start} – {allowance.period_end}
-                <small>Used {money(allowance.used_minor)}</small>
-              </span>
-              <input
-                aria-label={`Allowance for ${allowance.period_start}`}
-                defaultValue={allowance.amount_minor ?? ""}
-                inputMode="numeric"
-                name="amount"
-                pattern="[0-9]*"
-                required
-              />
-              <button className="text-button" type="submit">
-                Save
-              </button>
-            </form>
-          ))}
-        </section>
 
         <section className="card budget-panel budget-panel-wide">
           <div className="section-heading">
@@ -417,10 +330,10 @@ export function BudgetSettingsPage() {
               </span>
               <input
                 aria-label={`${category.category_name} budget`}
-                defaultValue={category.amount_minor ?? ""}
-                inputMode="numeric"
+                defaultValue={majorAmount(category.amount_minor)}
+                inputMode="decimal"
                 name="amount"
-                pattern="[0-9]*"
+                pattern="[0-9]+([.][0-9]{1,2})?"
                 required
               />
               <button className="text-button" type="submit">
@@ -428,6 +341,160 @@ export function BudgetSettingsPage() {
               </button>
             </form>
           ))}
+        </section>
+
+        <section className="card budget-panel budget-panel-wide payday-settings">
+          <div className="optional-feature-heading">
+            <div className="section-heading">
+              <p className="eyebrow">Optional</p>
+              <h2>Budget by payday</h2>
+            </div>
+            <button
+              aria-expanded={showPaydaySettings}
+              className="text-button"
+              onClick={() => setShowPaydaySettings((visible) => !visible)}
+              type="button"
+            >
+              {showPaydaySettings
+                ? "Hide"
+                : mode === "payday"
+                  ? "Manage"
+                  : "Set up"}
+            </button>
+          </div>
+          <p className="hint payday-intro">
+            Use this only if you want to divide your monthly budget between two
+            pay periods. It does not add money to your overall budget.
+          </p>
+
+          {showPaydaySettings && (
+            <div className="payday-settings-content">
+              {paydaySchedule ? (
+                <div className="payday-status">
+                  <div>
+                    <strong>
+                      {mode === "payday"
+                        ? "Payday budgeting is on"
+                        : "Payday budgeting is off"}
+                    </strong>
+                    <p className="hint">
+                      Current cutoffs: {paydaySchedule.first_day}th and{" "}
+                      {paydaySchedule.second_day}th, effective{" "}
+                      {paydaySchedule.effective_from}.
+                    </p>
+                  </div>
+                  <button
+                    className="button secondary-button"
+                    onClick={() =>
+                      void saveMode(
+                        mode === "payday" ? "calendar_month" : "payday",
+                      )
+                    }
+                    type="button"
+                  >
+                    {mode === "payday"
+                      ? "Turn off payday budgeting"
+                      : "Enable payday budgeting"}
+                  </button>
+                </div>
+              ) : (
+                <form className="payday-schedule-form" onSubmit={saveSchedule}>
+                  <div className="section-heading">
+                    <p className="eyebrow">Setup</p>
+                    <h3>Choose your cutoff schedule</h3>
+                  </div>
+                  <div className="payday-schedule-fields">
+                    <label>
+                      First cutoff
+                      <input
+                        min="1"
+                        max="31"
+                        type="number"
+                        value={firstDay}
+                        onChange={(event) => setFirstDay(event.target.value)}
+                        required
+                      />
+                    </label>
+                    <label>
+                      Second cutoff
+                      <input
+                        min="1"
+                        max="31"
+                        type="number"
+                        value={secondDay}
+                        onChange={(event) => setSecondDay(event.target.value)}
+                        required
+                      />
+                    </label>
+                    <label>
+                      Effective from <span className="hint">period start</span>
+                      <input
+                        type="date"
+                        value={effectiveFrom}
+                        onChange={(event) =>
+                          setEffectiveFrom(event.target.value)
+                        }
+                        required
+                      />
+                    </label>
+                  </div>
+                  <button className="button" type="submit">
+                    Save and enable payday budgeting
+                  </button>
+                </form>
+              )}
+
+              {mode === "payday" && paydaySchedule && (
+                <section
+                  className="payday-allowances"
+                  aria-labelledby="payday-allowances-heading"
+                >
+                  <div className="section-heading">
+                    <p className="eyebrow">Optional allocations</p>
+                    <h3 id="payday-allowances-heading">Payday allowances</h3>
+                  </div>
+                  {cycle?.allowances_match_budget === false && (
+                    <p className="budget-warning" role="alert">
+                      Configured segment allowances (
+                      {money(cycle.allowances_total_minor)}) do not equal the
+                      overall budget.
+                    </p>
+                  )}
+                  {cycle?.payday_allowances.map((allowance) => (
+                    <form
+                      className="allocation-row"
+                      key={allowance.period_start}
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void saveAllowance(
+                          allowance.period_start,
+                          new FormData(event.currentTarget).get(
+                            "amount",
+                          ) as string,
+                        );
+                      }}
+                    >
+                      <span>
+                        {allowance.period_start} – {allowance.period_end}
+                        <small>Used {money(allowance.used_minor)}</small>
+                      </span>
+                      <input
+                        aria-label={`Allowance for ${allowance.period_start}`}
+                        defaultValue={majorAmount(allowance.amount_minor)}
+                        inputMode="decimal"
+                        name="amount"
+                        pattern="[0-9]+([.][0-9]{1,2})?"
+                        required
+                      />
+                      <button className="text-button" type="submit">
+                        Save
+                      </button>
+                    </form>
+                  ))}
+                </section>
+              )}
+            </div>
+          )}
         </section>
       </section>
     </main>
