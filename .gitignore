@@ -42,3 +42,5 @@ backups/
 # Local TLS and SSH private-key material
 *.key
 *.pem
+
+backend/build/

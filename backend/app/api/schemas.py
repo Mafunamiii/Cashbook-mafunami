@@ -291,6 +291,7 @@ class DashboardResponse(BudgetAllocationResponse):
     net_profit_loss_minor: int
     payday_schedule: PaydayScheduleResponse | None
     payday_is_configured: bool
+    payday_is_enabled: bool
     category_spending: list[DashboardCategoryResponse]
     category_budgets: list[DashboardCategoryResponse]
     recent_transactions: list[DashboardTransactionResponse]

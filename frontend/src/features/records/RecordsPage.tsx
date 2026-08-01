@@ -7,6 +7,11 @@ import type { Transaction } from "../transactions/transactionModel";
 type Grouping = "calendar_month" | "payday";
 type Sort = "newest" | "oldest";
 
+type BudgetSettings = {
+  reporting_mode: Grouping;
+  payday_schedule: { id: string } | null;
+};
+
 type StatementTransaction = Transaction & {
   running_balance_minor: number;
   period_start: string;
@@ -89,6 +94,7 @@ export function RecordsPage() {
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<Sort>("newest");
   const [grouping, setGrouping] = useState<Grouping>("calendar_month");
+  const [paydayAvailable, setPaydayAvailable] = useState(false);
   const [search, setSearch] = useState("");
   const [type, setType] = useState<"" | CategoryType>("");
   const [categoryId, setCategoryId] = useState("");
@@ -147,15 +153,30 @@ export function RecordsPage() {
 
   useEffect(() => {
     let active = true;
-    fetch(`${apiBaseUrl}/api/v1/categories?include_archived=true`, {
-      credentials: "include",
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Unable to load categories.");
-        return (await response.json()) as Category[];
+    Promise.all([
+      fetch(`${apiBaseUrl}/api/v1/categories?include_archived=true`, {
+        credentials: "include",
+      }),
+      fetch(`${apiBaseUrl}/api/v1/budget-settings`, {
+        credentials: "include",
+      }),
+    ])
+      .then(async ([categoriesResponse, settingsResponse]) => {
+        if (!categoriesResponse.ok)
+          throw new Error("Unable to load categories.");
+        const items = (await categoriesResponse.json()) as Category[];
+        const settings = settingsResponse.ok
+          ? ((await settingsResponse.json()) as BudgetSettings)
+          : null;
+        return { items, settings };
       })
-      .then((items) => {
-        if (active) setCategories(items);
+      .then(({ items, settings }) => {
+        if (active) {
+          setCategories(items);
+          setPaydayAvailable(
+            settings?.reporting_mode === "payday" && !!settings.payday_schedule,
+          );
+        }
       })
       .catch(() => {
         // The statement remains usable without filter labels or editing.
@@ -386,20 +407,22 @@ export function RecordsPage() {
             <option value="oldest">Oldest first</option>
           </select>
         </label>
-        <fieldset className="grouping-toggle">
-          <legend>Group by</legend>
-          {(["calendar_month", "payday"] as const).map((item) => (
-            <button
-              aria-pressed={grouping === item}
-              className={grouping === item ? "active" : ""}
-              key={item}
-              onClick={() => updateFilters(() => setGrouping(item))}
-              type="button"
-            >
-              {item === "calendar_month" ? "Month" : "Payday"}
-            </button>
-          ))}
-        </fieldset>
+        {paydayAvailable && (
+          <fieldset className="grouping-toggle">
+            <legend>Group by</legend>
+            {(["calendar_month", "payday"] as const).map((item) => (
+              <button
+                aria-pressed={grouping === item}
+                className={grouping === item ? "active" : ""}
+                key={item}
+                onClick={() => updateFilters(() => setGrouping(item))}
+                type="button"
+              >
+                {item === "calendar_month" ? "Month" : "Payday"}
+              </button>
+            ))}
+          </fieldset>
+        )}
       </section>
 
       <p className="statement-note">

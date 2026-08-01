@@ -32,19 +32,38 @@ administration.
    curl http://127.0.0.1:3004
    ```
 
-PostgreSQL has no host `ports` mapping and is reachable only by Compose services. The backend and frontend bind to loopback only, ready for a local HTTPS reverse proxy in a later stage.
+The app is also available to devices on the same LAN at
+`http://<host-ip>:3004` (for example, `http://192.168.1.20:3004`). The
+frontend proxies API requests internally, so clients only need access to port
+3004. Allow that TCP port through the host firewall if necessary. PostgreSQL
+has no host `ports` mapping and is reachable only by Compose services.
 
 Stop the stack with `docker compose down`. Add `--volumes` only when you intentionally want to remove local database data.
 
 ## Database migrations
 
-Run the initial schema migration after the database is healthy:
+The backend applies pending migrations automatically before starting the API.
+To apply or inspect them manually:
 
 ```bash
 docker compose run --rm backend alembic upgrade head
 ```
 
 Check the current revision with `docker compose run --rm backend alembic current`.
+
+## Main administrator
+
+Create the first administrator after the backend is running:
+
+```bash
+docker compose exec backend python -m scripts.bootstrap_admin \
+  --email admin@example.com \
+  --display-name "Main Administrator"
+```
+
+The command prints a generated temporary password once. It is idempotent: for
+an existing email it promotes and re-enables that account, resets its password,
+and requires a password change at the next sign-in.
 
 ## Authentication configuration
 

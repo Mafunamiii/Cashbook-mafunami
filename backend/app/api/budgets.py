@@ -211,6 +211,11 @@ def get_dashboard(
     )
     schedule = _schedule_for_date(db, user_id=current_user.id, value=anchor)
     payday_is_configured = schedule is not None
+    payday_is_enabled = bool(
+        payday_is_configured
+        and preferences is not None
+        and preferences.reporting_mode == ReportingMode.PAYDAY
+    )
 
     if requested_mode == ReportingMode.PAYDAY and schedule is not None:
         schedules = list(
@@ -317,6 +322,7 @@ def get_dashboard(
         net_profit_loss_minor=summary.net_profit_loss_minor,
         payday_schedule=_schedule_response(schedule),
         payday_is_configured=payday_is_configured,
+        payday_is_enabled=payday_is_enabled,
         category_spending=category_spending,
         category_budgets=category_budgets,
         recent_transactions=[_transaction_response(item) for item in recent_transactions],
@@ -342,6 +348,17 @@ def update_reporting_mode(
     current_user: CsrfProtectedUser,
     db: DatabaseSession,
 ) -> BudgetSettingsResponse:
+    if payload.reporting_mode == ReportingMode.PAYDAY:
+        has_schedule = db.scalar(
+            select(PaydaySchedule.id)
+            .where(PaydaySchedule.user_id == current_user.id)
+            .limit(1)
+        )
+        if has_schedule is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Configure a payday schedule before enabling payday budgeting.",
+            )
     preferences = db.get(UserPreferences, current_user.id)
     if preferences is None:
         preferences = UserPreferences(
