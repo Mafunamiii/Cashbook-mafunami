@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--display-name", default="Main Administrator")
     parser.add_argument(
         "--temporary-password",
-        help="At least 12 characters. If omitted, a secure value is generated.",
+        help="At least 8 characters. If omitted, a secure value is generated.",
     )
     return parser.parse_args()
 
@@ -45,8 +45,8 @@ def main() -> None:
         raise SystemExit("Enter a valid administrator email address.")
 
     password = args.temporary_password or secrets.token_urlsafe(18)
-    if len(password) < 12:
-        raise SystemExit("The temporary password must be at least 12 characters.")
+    if len(password) < 8:
+        raise SystemExit("The temporary password must be at least 8 characters.")
 
     with create_session_factory()() as db:
         user = db.scalar(select(User).where(User.email == email))

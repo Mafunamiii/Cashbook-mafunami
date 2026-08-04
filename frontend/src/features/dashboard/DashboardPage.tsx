@@ -1,9 +1,24 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 
 import { apiRequest } from "../../api";
 import { AddTransaction } from "../transactions/AddTransaction";
-import { budgetProgress } from "./budgetProgress";
+import {
+  budgetProgress,
+  categoryBudgetRemainingCopy,
+  categoryBudgetUsageCopy,
+} from "./budgetProgress";
+import {
+  defaultSummarySelection,
+  selectionAfterFailedSave,
+  selectionFromApi,
+  selectionToApi,
+} from "./summaryPreferences";
+import type {
+  DashboardSummaryPreference,
+  SummaryKey,
+  SummarySelection,
+} from "./summaryPreferences";
 
 type ReportingMode = "calendar_month" | "payday";
 
@@ -45,6 +60,18 @@ type Dashboard = Allocation & {
   category_budgets: Category[];
   recent_transactions: RecentTransaction[];
 };
+
+type Settings = {
+  dashboard_summary: DashboardSummaryPreference;
+  payday_setup_notice_dismissed: boolean;
+};
+
+const summaryOptions: { key: SummaryKey; label: string }[] = [
+  { key: "inflow", label: "Inflow" },
+  { key: "outflow", label: "Outflow" },
+  { key: "profitLoss", label: "Profit / loss" },
+  { key: "budgetUsed", label: "Budget used" },
+];
 
 function localToday() {
   const now = new Date();
@@ -91,6 +118,23 @@ export function DashboardPage({
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [isCycleOpen, setIsCycleOpen] = useState(false);
+  const [visibleSummaries, setVisibleSummaries] = useState<SummarySelection>(
+    defaultSummarySelection,
+  );
+  const [confirmedSummaries, setConfirmedSummaries] =
+    useState<SummarySelection>(defaultSummarySelection);
+  const [preferenceStatus, setPreferenceStatus] = useState<
+    "loading" | "idle" | "saving" | "saved" | "error"
+  >("loading");
+  const [failedSave, setFailedSave] = useState<{
+    selection: SummarySelection;
+    attempts: number;
+  } | null>(null);
+  const [paydayNoticeDismissed, setPaydayNoticeDismissed] = useState(false);
+  const [paydayNoticeReady, setPaydayNoticeReady] = useState(false);
+  const [paydayNoticeError, setPaydayNoticeError] = useState(false);
+  const saveVersion = useRef(0);
+  const customizerRef = useRef<HTMLDetailsElement>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -116,6 +160,102 @@ export function DashboardPage({
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  useEffect(() => {
+    let active = true;
+    void apiRequest<Settings>("/settings")
+      .then((settings) => {
+        if (!active) return;
+        const selection = selectionFromApi(settings.dashboard_summary);
+        setVisibleSummaries(selection);
+        setConfirmedSummaries(selection);
+        setPaydayNoticeDismissed(settings.payday_setup_notice_dismissed);
+        setPaydayNoticeReady(true);
+        setPreferenceStatus("idle");
+      })
+      .catch(() => {
+        if (!active) return;
+        setPaydayNoticeReady(true);
+        setPreferenceStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    function closeCustomizer(event: MouseEvent | KeyboardEvent) {
+      if (
+        event instanceof KeyboardEvent
+          ? event.key === "Escape"
+          : !customizerRef.current?.contains(event.target as Node)
+      ) {
+        customizerRef.current?.removeAttribute("open");
+      }
+    }
+    document.addEventListener("mousedown", closeCustomizer);
+    document.addEventListener("keydown", closeCustomizer);
+    return () => {
+      document.removeEventListener("mousedown", closeCustomizer);
+      document.removeEventListener("keydown", closeCustomizer);
+    };
+  }, []);
+
+  const saveSummaryPreferences = useCallback(
+    async (selection: SummarySelection, attempts: number) => {
+      const version = ++saveVersion.current;
+      setPreferenceStatus("saving");
+      setFailedSave(null);
+      try {
+        const settings = await apiRequest<Settings>("/settings", {
+          method: "PATCH",
+          body: JSON.stringify({
+            dashboard_summary: selectionToApi(selection),
+          }),
+        });
+        if (version !== saveVersion.current) return;
+        const confirmed = selectionFromApi(settings.dashboard_summary);
+        setVisibleSummaries(confirmed);
+        setConfirmedSummaries(confirmed);
+        setPreferenceStatus("saved");
+      } catch {
+        if (version !== saveVersion.current) return;
+        const retainedSelection = selectionAfterFailedSave(
+          selection,
+          confirmedSummaries,
+          attempts,
+        );
+        setVisibleSummaries(retainedSelection);
+        if (attempts >= 3) {
+          setFailedSave(null);
+        } else {
+          setFailedSave({ selection, attempts });
+        }
+        setPreferenceStatus("error");
+      }
+    },
+    [confirmedSummaries],
+  );
+
+  function updateSummary(key: SummaryKey, checked: boolean) {
+    const selection = { ...visibleSummaries, [key]: checked };
+    setVisibleSummaries(selection);
+    void saveSummaryPreferences(selection, 1);
+  }
+
+  async function dismissPaydayNotice() {
+    setPaydayNoticeDismissed(true);
+    setPaydayNoticeError(false);
+    try {
+      await apiRequest<Settings>("/settings", {
+        method: "PATCH",
+        body: JSON.stringify({ payday_setup_notice_dismissed: true }),
+      });
+    } catch {
+      setPaydayNoticeDismissed(false);
+      setPaydayNoticeError(true);
+    }
+  }
 
   const chartData = useMemo(
     () =>
@@ -229,18 +369,90 @@ export function DashboardPage({
       )}
       {dashboard &&
         !dashboard.payday_is_configured &&
-        mode === "calendar_month" && (
-          <p className="notice">
-            Set payday cutoffs in Budget settings to view payday segments.
-          </p>
+        mode === "calendar_month" &&
+        paydayNoticeReady &&
+        !paydayNoticeDismissed && (
+          <aside className="payday-setup-notice notice" role="note">
+            <span>
+              Set payday cutoffs in Budget settings to view payday segments.
+            </span>
+            <button
+              aria-label="Dismiss payday setup reminder"
+              className="notice-dismiss"
+              onClick={() => void dismissPaydayNotice()}
+              type="button"
+            >
+              ×
+            </button>
+          </aside>
         )}
+      {paydayNoticeError && (
+        <p className="notice-save-error" role="alert">
+          Could not save the dismissal. Please try again.
+        </p>
+      )}
       {dashboard && (
         <>
           <section
             className="budget-hero card"
             aria-labelledby="remaining-budget"
           >
-            <p className="eyebrow">Remaining budget</p>
+            <div className="budget-hero-heading">
+              <p className="eyebrow">Remaining budget</p>
+              <div className="summary-customizer">
+                <details ref={customizerRef}>
+                  <summary>
+                    <span className="customize-label-full">
+                      Customize dashboard
+                    </span>
+                    <span className="customize-label-compact">Customize</span>
+                  </summary>
+                  <fieldset>
+                    <legend className="sr-only">Visible summary cards</legend>
+                    {summaryOptions.map((option) => (
+                      <label key={option.key}>
+                        <input
+                          checked={visibleSummaries[option.key]}
+                          disabled={
+                            preferenceStatus === "loading" ||
+                            preferenceStatus === "saving"
+                          }
+                          onChange={(event) =>
+                            updateSummary(option.key, event.target.checked)
+                          }
+                          type="checkbox"
+                        />
+                        {option.label}
+                      </label>
+                    ))}
+                    <p className="preference-status" role="status">
+                      {preferenceStatus === "loading" && "Loading preferences…"}
+                      {preferenceStatus === "saving" && "Saving…"}
+                      {preferenceStatus === "saved" && "Saved"}
+                      {preferenceStatus === "error" && failedSave && (
+                        <>
+                          Could not save. Selection retained.{" "}
+                          <button
+                            onClick={() =>
+                              void saveSummaryPreferences(
+                                failedSave.selection,
+                                failedSave.attempts + 1,
+                              )
+                            }
+                            type="button"
+                          >
+                            Retry ({3 - failedSave.attempts} left)
+                          </button>
+                        </>
+                      )}
+                      {preferenceStatus === "error" &&
+                        !failedSave &&
+                        "Preferences unavailable; showing the last confirmed selection."}
+                    </p>
+                  </fieldset>
+                </details>
+              </div>
+            </div>
             <h2 id="remaining-budget">
               {dashboard ? money(dashboard.remaining_minor) : "—"}
             </h2>
@@ -281,38 +493,44 @@ export function DashboardPage({
             </p>
           </section>
 
-          <section className="summary-grid" aria-label="Financial summary">
-            <SummaryCard
-              label="Inflow"
-              value={dashboard ? money(dashboard.total_inflow_minor) : "—"}
-              tone="inflow"
-            />
-            <SummaryCard
-              label="Outflow"
-              value={dashboard ? money(dashboard.total_outflow_minor) : "—"}
-              tone="outflow"
-            />
-            <SummaryCard
-              label="Profit / loss"
-              value={
-                dashboard ? signedMoney(dashboard.net_profit_loss_minor) : "—"
-              }
-              tone={
-                dashboard && dashboard.net_profit_loss_minor < 0
-                  ? "outflow"
-                  : "inflow"
-              }
-            />
-            <SummaryCard
-              label="Budget used"
-              value={
-                dashboard?.usage_percent
-                  ? `${Number(dashboard.usage_percent).toFixed(0)}%`
-                  : "—"
-              }
-              tone="neutral"
-            />
-          </section>
+          {Object.values(visibleSummaries).some(Boolean) && (
+            <section className="summary-grid" aria-label="Financial summary">
+              {visibleSummaries.inflow && (
+                <SummaryCard
+                  label="Inflow"
+                  value={money(dashboard.total_inflow_minor)}
+                  tone="inflow"
+                />
+              )}
+              {visibleSummaries.outflow && (
+                <SummaryCard
+                  label="Outflow"
+                  value={money(dashboard.total_outflow_minor)}
+                  tone="outflow"
+                />
+              )}
+              {visibleSummaries.profitLoss && (
+                <SummaryCard
+                  label="Profit / loss"
+                  value={signedMoney(dashboard.net_profit_loss_minor)}
+                  tone={
+                    dashboard.net_profit_loss_minor < 0 ? "outflow" : "inflow"
+                  }
+                />
+              )}
+              {visibleSummaries.budgetUsed && (
+                <SummaryCard
+                  label="Budget used"
+                  value={
+                    dashboard.usage_percent
+                      ? `${Number(dashboard.usage_percent).toFixed(0)}%`
+                      : "—"
+                  }
+                  tone="neutral"
+                />
+              )}
+            </section>
+          )}
 
           <section className="dashboard-grid">
             <section
@@ -449,15 +667,29 @@ export function DashboardPage({
                 {dashboard.category_budgets.map((item) => (
                   <div key={item.category_id}>
                     <p>
-                      <span>
+                      <span className="category-budget-label">
                         <i
                           className="category-dot"
                           style={{ background: item.category_color }}
                         />
-                        {item.category_name}
+                        <span className="category-budget-name">
+                          {item.category_name}
+                        </span>
+                        <small
+                          className={`category-budget-remaining ${budgetProgress(item).tone}`}
+                        >
+                          {categoryBudgetRemainingCopy(
+                            item.remaining_minor,
+                            money,
+                          )}
+                        </small>
                       </span>
-                      <strong>
-                        {money(item.used_minor)} / {money(item.amount_minor)}
+                      <strong className="category-budget-usage">
+                        {categoryBudgetUsageCopy(
+                          item.used_minor,
+                          item.amount_minor,
+                          money,
+                        )}
                       </strong>
                     </p>
                     <div

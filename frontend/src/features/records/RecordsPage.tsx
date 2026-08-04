@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 
 import type { Category, CategoryType } from "../categories/categoryModel";
 import type { Transaction } from "../transactions/transactionModel";
+import { majorAmount, toMinorUnits } from "../transactions/transactionModel";
 
 type Grouping = "calendar_month" | "payday";
 type Sort = "newest" | "oldest";
@@ -35,6 +36,11 @@ type Editor = {
   amount_minor: string;
   transaction_date: string;
   notes: string;
+};
+
+type PendingBulkDeletion = {
+  ids: string[];
+  timerId: number;
 };
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
@@ -82,7 +88,7 @@ function toEditor(item: StatementTransaction): Editor {
     name: item.name,
     transaction_type: item.transaction_type,
     category_id: item.category_id,
-    amount_minor: String(item.amount_minor),
+    amount_minor: majorAmount(item.amount_minor),
     transaction_date: item.transaction_date,
     notes: item.notes ?? "",
   };
@@ -106,6 +112,10 @@ export function RecordsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isClearingAll, setIsClearingAll] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [pendingBulkDeletion, setPendingBulkDeletion] =
+    useState<PendingBulkDeletion | null>(null);
 
   const load = useCallback(async () => {
     const params = new URLSearchParams({
@@ -188,14 +198,23 @@ export function RecordsPage() {
 
   const groups = useMemo(() => {
     const result: { label: string; items: StatementTransaction[] }[] = [];
+    const pendingIds = new Set(pendingBulkDeletion?.ids ?? []);
     for (const item of pageData?.items ?? []) {
+      if (pendingIds.has(item.id)) continue;
       const label = periodLabel(item, grouping);
       const group = result.find((candidate) => candidate.label === label);
       if (group) group.items.push(item);
       else result.push({ label, items: [item] });
     }
     return result;
-  }, [grouping, pageData]);
+  }, [grouping, pageData, pendingBulkDeletion]);
+
+  const visibleIds = useMemo(
+    () => groups.flatMap((group) => group.items.map((item) => item.id)),
+    [groups],
+  );
+  const allVisibleSelected =
+    visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
 
   function updateFilters(callback: () => void) {
     setPage(1);
@@ -205,9 +224,9 @@ export function RecordsPage() {
   async function saveEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editor) return;
-    const amountMinor = Number(editor.amount_minor);
-    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
-      setError("Amount must be a positive whole number of minor units.");
+    const amountMinor = toMinorUnits(editor.amount_minor);
+    if (amountMinor === null) {
+      setError("Enter a valid amount with up to two decimal places.");
       return;
     }
     setIsSaving(true);
@@ -269,6 +288,73 @@ export function RecordsPage() {
     }
   }
 
+  function toggleSelected(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllVisible() {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (allVisibleSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
+  async function commitBulkDelete(ids: string[]) {
+    try {
+      const csrf = csrfToken();
+      const response = await fetch(`${apiBaseUrl}/api/v1/transactions/bulk`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(csrf ? { "X-CSRF-Token": decodeURIComponent(csrf) } : {}),
+        },
+        body: JSON.stringify({ transaction_ids: ids }),
+      });
+      if (!response.ok) throw new Error("Unable to delete selected records.");
+      setPendingBulkDeletion(null);
+      setNotice(`${ids.length} record${ids.length === 1 ? "" : "s"} deleted.`);
+      await load();
+    } catch (requestError) {
+      setPendingBulkDeletion(null);
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to delete selected records.",
+      );
+    }
+  }
+
+  function beginBulkDelete() {
+    const ids = [...selectedIds];
+    if (!ids.length || pendingBulkDeletion) return;
+    if (
+      !window.confirm(
+        `Delete ${ids.length} selected record${ids.length === 1 ? "" : "s"}? You will have 10 seconds to undo.`,
+      )
+    )
+      return;
+    const timerId = window.setTimeout(() => void commitBulkDelete(ids), 10_000);
+    setPendingBulkDeletion({ ids, timerId });
+    setSelectedIds(new Set());
+    setIsSelecting(false);
+    setNotice(null);
+  }
+
+  function undoBulkDelete() {
+    if (!pendingBulkDeletion) return;
+    window.clearTimeout(pendingBulkDeletion.timerId);
+    setPendingBulkDeletion(null);
+    setNotice("Deletion undone.");
+  }
+
   async function clearAllTransactions() {
     const confirmation = window.prompt(
       "This permanently deletes every transaction in your account, including records hidden by filters. Type CLEAR ALL to continue.",
@@ -322,14 +408,27 @@ export function RecordsPage() {
             Every transaction, with a running net cash-flow balance.
           </p>
         </div>
-        <button
-          className="text-button danger-button"
-          disabled={isClearingAll}
-          onClick={() => void clearAllTransactions()}
-          type="button"
-        >
-          {isClearingAll ? "Clearing…" : "Clear all transactions"}
-        </button>
+        <div className="records-heading-actions">
+          <button
+            className="button button-quiet records-select-trigger"
+            disabled={!!pendingBulkDeletion}
+            onClick={() => {
+              setIsSelecting((current) => !current);
+              setSelectedIds(new Set());
+            }}
+            type="button"
+          >
+            {isSelecting ? "Cancel selection" : "Select records"}
+          </button>
+          <button
+            className="text-button danger-button"
+            disabled={isClearingAll || !!pendingBulkDeletion}
+            onClick={() => void clearAllTransactions()}
+            type="button"
+          >
+            {isClearingAll ? "Clearing…" : "Clear all transactions"}
+          </button>
+        </div>
       </header>
 
       <section className="card records-filters" aria-label="Filter records">
@@ -439,6 +538,46 @@ export function RecordsPage() {
           {notice}
         </p>
       )}
+      {pendingBulkDeletion && (
+        <div className="bulk-delete-undo" role="status">
+          <span>
+            Deleting {pendingBulkDeletion.ids.length} record
+            {pendingBulkDeletion.ids.length === 1 ? "" : "s"} in 10 seconds.
+          </span>
+          <button
+            className="text-button"
+            onClick={undoBulkDelete}
+            type="button"
+          >
+            Undo
+          </button>
+        </div>
+      )}
+      {isSelecting && visibleIds.length > 0 && (
+        <div
+          className="bulk-selection-bar"
+          role="toolbar"
+          aria-label="Record selection"
+        >
+          <label>
+            <input
+              checked={allVisibleSelected}
+              onChange={toggleAllVisible}
+              type="checkbox"
+            />
+            Select this page
+          </label>
+          <span>{selectedIds.size} selected across pages</span>
+          <button
+            className="button danger-button"
+            disabled={!selectedIds.size}
+            onClick={beginBulkDelete}
+            type="button"
+          >
+            Delete selected
+          </button>
+        </div>
+      )}
       {isLoading ? (
         <div className="skeleton records-skeleton" role="status">
           <span className="sr-only">Loading records…</span>
@@ -464,6 +603,11 @@ export function RecordsPage() {
                   <thead>
                     <tr>
                       <th>Date</th>
+                      {isSelecting && (
+                        <th>
+                          <span className="sr-only">Select</span>
+                        </th>
+                      )}
                       <th>Name</th>
                       <th>Category</th>
                       <th>Type</th>
@@ -479,8 +623,11 @@ export function RecordsPage() {
                       <RecordRow
                         item={item}
                         key={item.id}
+                        isSelected={selectedIds.has(item.id)}
+                        isSelecting={isSelecting}
                         onDelete={deleteTransaction}
                         onEdit={() => setEditor(toEditor(item))}
+                        onSelect={() => toggleSelected(item.id)}
                       />
                     ))}
                   </tbody>
@@ -491,8 +638,11 @@ export function RecordsPage() {
                   <RecordCard
                     item={item}
                     key={item.id}
+                    isSelected={selectedIds.has(item.id)}
+                    isSelecting={isSelecting}
                     onDelete={deleteTransaction}
                     onEdit={() => setEditor(toEditor(item))}
+                    onSelect={() => toggleSelected(item.id)}
                   />
                 ))}
               </div>
@@ -602,15 +752,16 @@ export function RecordsPage() {
                 </select>
               </label>
               <label>
-                Amount <span className="hint">minor units</span>
+                Amount <span className="hint">PHP</span>
                 <input
-                  inputMode="numeric"
-                  min="1"
+                  inputMode="decimal"
+                  min="0.01"
                   onChange={(event) =>
                     setEditor({ ...editor, amount_minor: event.target.value })
                   }
                   required
-                  type="text"
+                  step="0.01"
+                  type="number"
                   value={editor.amount_minor}
                 />
               </label>
@@ -664,16 +815,32 @@ export function RecordsPage() {
 
 function RecordRow({
   item,
+  isSelecting,
+  isSelected,
   onEdit,
   onDelete,
+  onSelect,
 }: {
   item: StatementTransaction;
+  isSelecting: boolean;
+  isSelected: boolean;
   onEdit: () => void;
   onDelete: (item: StatementTransaction) => void;
+  onSelect: () => void;
 }) {
   return (
-    <tr>
+    <tr className={isSelected ? "record-selected" : undefined}>
       <td>{readableDate(item.transaction_date)}</td>
+      {isSelecting && (
+        <td className="record-select-cell">
+          <input
+            aria-label={`Select ${item.name}`}
+            checked={isSelected}
+            onChange={onSelect}
+            type="checkbox"
+          />
+        </td>
+      )}
       <td>
         <span className="record-name">
           <i
@@ -715,16 +882,31 @@ function RecordRow({
 
 function RecordCard({
   item,
+  isSelecting,
+  isSelected,
   onEdit,
   onDelete,
+  onSelect,
 }: {
   item: StatementTransaction;
+  isSelecting: boolean;
+  isSelected: boolean;
   onEdit: () => void;
   onDelete: (item: StatementTransaction) => void;
+  onSelect: () => void;
 }) {
   return (
-    <article className="record-card">
+    <article className={`record-card${isSelected ? " record-selected" : ""}`}>
       <div className="record-card-top">
+        {isSelecting && (
+          <input
+            aria-label={`Select ${item.name}`}
+            checked={isSelected}
+            className="record-card-select"
+            onChange={onSelect}
+            type="checkbox"
+          />
+        )}
         <span
           className="category-dot"
           style={{ background: item.category_color }}
@@ -745,18 +927,20 @@ function RecordCard({
             {money(item.running_balance_minor)}
           </strong>
         </span>
-        <span>
-          <button className="text-button" onClick={onEdit} type="button">
-            Edit
-          </button>
-          <button
-            className="text-button danger-button"
-            onClick={() => onDelete(item)}
-            type="button"
-          >
-            Delete
-          </button>
-        </span>
+        {!isSelecting && (
+          <span>
+            <button className="text-button" onClick={onEdit} type="button">
+              Edit
+            </button>
+            <button
+              className="text-button danger-button"
+              onClick={() => onDelete(item)}
+              type="button"
+            >
+              Delete
+            </button>
+          </span>
+        )}
       </div>
     </article>
   );

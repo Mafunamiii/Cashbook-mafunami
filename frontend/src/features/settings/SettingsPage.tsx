@@ -214,11 +214,11 @@ export function SettingsPage({
               />
             </label>
             <label>
-              New password <span className="hint">at least 12 characters</span>
+              New password <span className="hint">at least 8 characters</span>
               <input
                 type="password"
                 autoComplete="new-password"
-                minLength={12}
+                minLength={8}
                 value={newPassword}
                 onChange={(event) => setNewPassword(event.target.value)}
                 required
@@ -229,7 +229,7 @@ export function SettingsPage({
               <input
                 type="password"
                 autoComplete="new-password"
-                minLength={12}
+                minLength={8}
                 value={confirmPassword}
                 onChange={(event) => setConfirmPassword(event.target.value)}
                 required

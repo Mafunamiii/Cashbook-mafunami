@@ -141,6 +141,28 @@ export function CategoriesPage() {
     }
   }
 
+  async function deleteCategory(category: Category) {
+    if (
+      !window.confirm(
+        `Delete “${category.name}” permanently? This cannot be undone.`,
+      )
+    )
+      return;
+    try {
+      await request<undefined>(`/${category.id}`, { method: "DELETE" });
+      if (editing?.id === category.id) {
+        setEditing(null);
+        setForm(emptyForm);
+      }
+      setNotice("Category deleted.");
+      await loadCategories();
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "Unable to delete category.",
+      );
+    }
+  }
+
   const grouped = (type: CategoryType) =>
     categories.filter((category) => category.transaction_type === type);
 
@@ -304,6 +326,13 @@ export function CategoriesPage() {
                             type="button"
                           >
                             {category.archived_at ? "Restore" : "Archive"}
+                          </button>
+                          <button
+                            className="text-button danger-text"
+                            onClick={() => void deleteCategory(category)}
+                            type="button"
+                          >
+                            Delete
                           </button>
                         </div>
                       </article>

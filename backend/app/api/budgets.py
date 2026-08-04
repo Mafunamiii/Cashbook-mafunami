@@ -31,6 +31,7 @@ from app.db.models import (
     BudgetConfiguration,
     Category,
     CategoryBudget,
+    CategoryBudgetResetHistory,
     PaydayAllowance,
     PaydaySchedule,
     ReportingMode,
@@ -147,6 +148,92 @@ def _payday_periods_for_month(
     return sorted(periods, key=lambda item: item[1].start)
 
 
+def _apply_category_payday_resets(db: DatabaseSession, *, user_id: uuid.UUID, today: date) -> bool:
+    """Lazily zero opted-in allocations after a new payday boundary.
+
+    The previous value is snapshotted before mutation so multiple payday
+    cycles in one calendar month do not erase allocation history.
+    """
+    schedules = list(
+        db.scalars(
+            select(PaydaySchedule)
+            .where(PaydaySchedule.user_id == user_id)
+            .order_by(PaydaySchedule.effective_from.asc())
+        )
+    )
+    if not schedules or schedules[0].effective_from > today:
+        return False
+    current_period = versioned_payday_period(today, _schedule_versions(schedules))
+    current_month = calendar_month_period(today).start
+    categories = list(
+        db.scalars(
+            select(Category).where(
+                Category.user_id == user_id,
+                Category.transaction_type == TransactionType.OUTFLOW,
+                Category.budget_reset_each_payday.is_(True),
+            )
+        )
+    )
+    changed = False
+    for category in categories:
+        if category.budget_reset_anchor is None:
+            category.budget_reset_anchor = current_period.start
+            changed = True
+            continue
+        if category.budget_reset_anchor >= current_period.start:
+            continue
+        previous_period = versioned_payday_period(
+            category.budget_reset_anchor, _schedule_versions(schedules)
+        )
+        previous_budget = db.scalar(
+            select(CategoryBudget).where(
+                CategoryBudget.user_id == user_id,
+                CategoryBudget.category_id == category.id,
+                CategoryBudget.month_start == calendar_month_period(previous_period.start).start,
+            )
+        )
+        history = db.scalar(
+            select(CategoryBudgetResetHistory).where(
+                CategoryBudgetResetHistory.user_id == user_id,
+                CategoryBudgetResetHistory.category_id == category.id,
+                CategoryBudgetResetHistory.period_start == previous_period.start,
+            )
+        )
+        if history is None:
+            db.add(
+                CategoryBudgetResetHistory(
+                    user_id=user_id,
+                    category_id=category.id,
+                    period_start=previous_period.start,
+                    period_end=previous_period.end,
+                    amount_minor=previous_budget.amount_minor if previous_budget else 0,
+                )
+            )
+        current_budget = db.scalar(
+            select(CategoryBudget).where(
+                CategoryBudget.user_id == user_id,
+                CategoryBudget.category_id == category.id,
+                CategoryBudget.month_start == current_month,
+            )
+        )
+        if current_budget is None:
+            db.add(
+                CategoryBudget(
+                    user_id=user_id,
+                    category_id=category.id,
+                    month_start=current_month,
+                    amount_minor=0,
+                )
+            )
+        else:
+            current_budget.amount_minor = 0
+        category.budget_reset_anchor = current_period.start
+        changed = True
+    if changed:
+        db.commit()
+    return changed
+
+
 def _owned_outflow_category_or_422(
     db: DatabaseSession, *, user_id: uuid.UUID, category_id: uuid.UUID
 ) -> Category:
@@ -204,6 +291,7 @@ def get_dashboard(
     period_mode: ReportingMode | None = None,
 ) -> DashboardResponse:
     """Return a compact, owner-scoped dashboard snapshot for one reporting period."""
+    _apply_category_payday_resets(db, user_id=current_user.id, today=date.today())
     anchor = anchor_date or date.today()
     preferences = db.get(UserPreferences, current_user.id)
     requested_mode = period_mode or (
@@ -276,26 +364,32 @@ def get_dashboard(
     category_spending.sort(key=lambda item: item.used_minor, reverse=True)
 
     category_month = calendar_month_period(period.start).start
-    category_configs = {
-        item.category_id: item.amount_minor
-        for item in db.scalars(
-            select(CategoryBudget).where(
+    category_configs = list(
+        db.execute(
+            select(CategoryBudget, Category)
+            .join(
+                Category,
+                (Category.user_id == CategoryBudget.user_id)
+                & (Category.id == CategoryBudget.category_id),
+            )
+            .where(
                 CategoryBudget.user_id == current_user.id,
                 CategoryBudget.month_start == category_month,
             )
         )
-    }
+    )
     category_budgets = [
         DashboardCategoryResponse(
-            category_id=items[0].category_id,
-            category_name=items[0].category.name,
-            category_color=items[0].category.color,
+            category_id=config.category_id,
+            category_name=category.name,
+            category_color=category.color,
             **_allocation_response(
-                calculate_budget_allocation(_entries(items), category_configs[items[0].category_id])
+                calculate_budget_allocation(
+                    _entries(spending.get(config.category_id, [])), config.amount_minor
+                )
             ).model_dump(),
         )
-        for items in spending.values()
-        if items[0].category_id in category_configs
+        for config, category in category_configs
     ]
     category_budgets.sort(key=lambda item: item.used_minor, reverse=True)
     recent_transactions = list(
@@ -350,9 +444,7 @@ def update_reporting_mode(
 ) -> BudgetSettingsResponse:
     if payload.reporting_mode == ReportingMode.PAYDAY:
         has_schedule = db.scalar(
-            select(PaydaySchedule.id)
-            .where(PaydaySchedule.user_id == current_user.id)
-            .limit(1)
+            select(PaydaySchedule.id).where(PaydaySchedule.user_id == current_user.id).limit(1)
         )
         if has_schedule is None:
             raise HTTPException(
@@ -432,6 +524,7 @@ def get_budget_cycle(
     month_start: date, current_user: ActiveUser, db: DatabaseSession
 ) -> BudgetCycleResponse:
     month_start = _month_start_or_422(month_start)
+    _apply_category_payday_resets(db, user_id=current_user.id, today=date.today())
     month = calendar_month_period(month_start)
     config = db.scalar(
         select(BudgetConfiguration).where(
@@ -517,6 +610,7 @@ def get_budget_cycle(
                 category_id=category.id,
                 category_name=category.name,
                 category_color=category.color,
+                reset_each_payday=category.budget_reset_each_payday,
                 **_allocation_response(allocation).model_dump(),
             )
         )
@@ -655,6 +749,26 @@ def set_category_budget(
 ) -> CategoryBudgetResponse:
     month_start = _month_start_or_422(month_start)
     category = _owned_outflow_category_or_422(db, user_id=current_user.id, category_id=category_id)
+    if payload.reset_each_payday is not None:
+        if payload.reset_each_payday:
+            schedules = list(
+                db.scalars(
+                    select(PaydaySchedule)
+                    .where(PaydaySchedule.user_id == current_user.id)
+                    .order_by(PaydaySchedule.effective_from.asc())
+                )
+            )
+            if not schedules or schedules[0].effective_from > date.today():
+                raise HTTPException(
+                    status_code=422,
+                    detail="Configure payday cutoffs before enabling category resets.",
+                )
+            category.budget_reset_anchor = versioned_payday_period(
+                date.today(), _schedule_versions(schedules)
+            ).start
+        else:
+            category.budget_reset_anchor = None
+        category.budget_reset_each_payday = payload.reset_each_payday
     category_budget = db.scalar(
         select(CategoryBudget).where(
             CategoryBudget.user_id == current_user.id,
@@ -691,5 +805,6 @@ def set_category_budget(
         category_id=category.id,
         category_name=category.name,
         category_color=category.color,
+        reset_each_payday=category.budget_reset_each_payday,
         **_allocation_response(allocation).model_dump(),
     )

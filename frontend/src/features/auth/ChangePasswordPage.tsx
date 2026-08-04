@@ -66,10 +66,10 @@ export function ChangePasswordPage({
           />
         </label>
         <label>
-          New password <span className="hint">at least 12 characters</span>
+          New password <span className="hint">at least 8 characters</span>
           <input
             autoComplete="new-password"
-            minLength={12}
+            minLength={8}
             required
             type="password"
             value={newPassword}
@@ -80,7 +80,7 @@ export function ChangePasswordPage({
           Confirm new password
           <input
             autoComplete="new-password"
-            minLength={12}
+            minLength={8}
             required
             type="password"
             value={confirmation}

@@ -13,6 +13,9 @@ from app.db.models import (
     BudgetConfiguration,
     Category,
     CategoryBudget,
+    CategoryBudgetResetHistory,
+    PaydayAllowance,
+    PaydaySchedule,
     Transaction,
     TransactionType,
     User,
@@ -144,6 +147,100 @@ def test_dashboard_is_owner_scoped_and_uses_only_outflows_for_its_chart(
     assert user_b["user"]["id"] != user_a["user"]["id"]
 
 
+def test_dashboard_includes_zero_spend_and_overspent_category_budgets(
+    client: TestClient, db_session: Session
+) -> None:
+    registered = register(client, "dashboard-budgets@example.test", "Dashboard Budgets")
+    user_id = uuid.UUID(registered["user"]["id"])
+    outflows = list(
+        db_session.scalars(
+            select(Category)
+            .where(
+                Category.user_id == user_id,
+                Category.transaction_type == TransactionType.OUTFLOW,
+            )
+            .order_by(Category.name)
+            .limit(2)
+        )
+    )
+    assert len(outflows) == 2
+    headers = csrf_headers(client, registered["csrf_token"])
+    for category, amount in zip(outflows, (5_000, 1_000), strict=True):
+        response = client.put(
+            f"/api/v1/budgets/2026-08-01/categories/{category.id}",
+            json={"amount_minor": amount},
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+    create_transaction(
+        client,
+        csrf_token=registered["csrf_token"],
+        category=outflows[1],
+        amount_minor=1_500,
+        transaction_date="2026-08-08",
+    )
+
+    response = client.get("/api/v1/dashboard?anchor_date=2026-08-10")
+    assert response.status_code == 200, response.text
+    budgets = {item["category_id"]: item for item in response.json()["category_budgets"]}
+    assert budgets[str(outflows[0].id)]["used_minor"] == 0
+    assert budgets[str(outflows[0].id)]["remaining_minor"] == 5_000
+    assert budgets[str(outflows[1].id)]["remaining_minor"] == -500
+    assert budgets[str(outflows[1].id)]["is_overspent"] is True
+
+
+def test_category_budget_payday_reset_preserves_cycle_history(
+    client: TestClient, db_session: Session
+) -> None:
+    registered = register(client, "category-reset@example.test", "Category Reset")
+    user_id = registered["user"]["id"]
+    category = category_of_type(db_session, user_id, TransactionType.OUTFLOW)
+    headers = csrf_headers(client, registered["csrf_token"])
+    schedule = client.post(
+        "/api/v1/budget-settings/payday-schedules",
+        json={"first_day": 1, "second_day": 2, "effective_from": "2026-07-01"},
+        headers=headers,
+    )
+    assert schedule.status_code == 201, schedule.text
+    saved = client.put(
+        f"/api/v1/budgets/2026-07-01/categories/{category.id}",
+        json={"amount_minor": 12_500, "reset_each_payday": True},
+        headers=headers,
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["reset_each_payday"] is True
+
+    db_session.refresh(category)
+    category.budget_reset_anchor = date(2026, 7, 2)
+    db_session.commit()
+
+    cycle = client.get("/api/v1/budgets/2026-08-01")
+    assert cycle.status_code == 200, cycle.text
+    allocation = next(
+        item for item in cycle.json()["category_budgets"] if item["category_id"] == str(category.id)
+    )
+    assert allocation["amount_minor"] == 0
+    assert allocation["reset_each_payday"] is True
+    history = db_session.scalar(
+        select(CategoryBudgetResetHistory).where(
+            CategoryBudgetResetHistory.user_id == uuid.UUID(user_id),
+            CategoryBudgetResetHistory.category_id == category.id,
+            CategoryBudgetResetHistory.period_start == date(2026, 7, 2),
+        )
+    )
+    assert history is not None
+    assert history.amount_minor == 12_500
+    july_budget = db_session.scalar(
+        select(CategoryBudget).where(
+            CategoryBudget.user_id == uuid.UUID(user_id),
+            CategoryBudget.category_id == category.id,
+            CategoryBudget.month_start == date(2026, 7, 1),
+        )
+    )
+    assert july_budget is not None
+    assert july_budget.amount_minor == 12_500
+
+
 def test_invite_only_registration_rejects_missing_or_wrong_code(client: TestClient) -> None:
     payload = {
         "email": "first@example.test",
@@ -218,8 +315,29 @@ def test_category_lifecycle_supports_custom_types_archive_and_restore(
     assert restored.status_code == 200
     assert restored.json()["archived_at"] is None
 
+    deleted = client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
+    assert deleted.status_code == 204
+    assert client.get(f"/api/v1/categories/{category['id']}").status_code == 404
 
-def test_category_delete_is_a_non_destructive_archive_when_transactions_reference_it(
+
+def test_preset_category_can_be_permanently_deleted(
+    client: TestClient, db_session: Session
+) -> None:
+    registered = register(client, "delete-preset@example.test", "Delete Preset")
+    category = category_for(db_session, registered["user"]["id"])
+    category_id = category.id
+
+    response = client.delete(
+        f"/api/v1/categories/{category_id}",
+        headers=csrf_headers(client, registered["csrf_token"]),
+    )
+
+    assert response.status_code == 204
+    db_session.expire_all()
+    assert db_session.get(Category, category_id) is None
+
+
+def test_category_delete_is_blocked_when_transactions_reference_it(
     client: TestClient, db_session: Session
 ) -> None:
     registered = register(client, "referenced@example.test", "Referenced User")
@@ -239,11 +357,12 @@ def test_category_delete_is_a_non_destructive_archive_when_transactions_referenc
     response = client.delete(
         f"/api/v1/categories/{category.id}", headers=csrf_headers(client, registered["csrf_token"])
     )
-    assert response.status_code == 204
+    assert response.status_code == 409
+    assert "Archive it" in response.json()["detail"]
     db_session.expire_all()
     stored_category = db_session.get(Category, category.id)
     assert stored_category is not None
-    assert stored_category.archived_at is not None
+    assert stored_category.archived_at is None
     assert db_session.scalar(select(Transaction.id).where(Transaction.category_id == category.id))
 
 
@@ -356,6 +475,13 @@ def test_settings_are_owner_scoped_and_update_profile_and_appearance(client: Tes
         "email": "settings@example.test",
         "reporting_mode": "calendar_month",
         "appearance_preference": "system",
+        "dashboard_summary": {
+            "inflow": True,
+            "outflow": True,
+            "profit_loss": True,
+            "budget_used": True,
+        },
+        "payday_setup_notice_dismissed": False,
     }
 
     updated = client.patch(
@@ -369,8 +495,61 @@ def test_settings_are_owner_scoped_and_update_profile_and_appearance(client: Tes
     assert "password_hash" not in updated.text
 
 
+def test_dashboard_summary_preferences_are_owner_scoped_and_persist(client: TestClient) -> None:
+    first = register(client, "first-dashboard@example.test", "First")
+    updated = client.patch(
+        "/api/v1/settings",
+        json={
+            "dashboard_summary": {
+                "inflow": False,
+                "outflow": True,
+                "profit_loss": False,
+                "budget_used": True,
+            }
+        },
+        headers=csrf_headers(client, first["csrf_token"]),
+    )
+    assert updated.status_code == 200, updated.text
+
+    register(client, "second-dashboard@example.test", "Second")
+    second_settings = client.get("/api/v1/settings")
+    assert second_settings.json()["dashboard_summary"] == {
+        "inflow": True,
+        "outflow": True,
+        "profit_loss": True,
+        "budget_used": True,
+    }
+
+    logged_in_again = login(client, "first-dashboard@example.test")
+    assert logged_in_again["user"]["display_name"] == "First"
+    first_settings = client.get("/api/v1/settings")
+    assert first_settings.json()["dashboard_summary"] == {
+        "inflow": False,
+        "outflow": True,
+        "profit_loss": False,
+        "budget_used": True,
+    }
+
+
+def test_payday_setup_notice_dismissal_is_owner_scoped_and_persists(client: TestClient) -> None:
+    first = register(client, "first-notice@example.test", "First")
+    updated = client.patch(
+        "/api/v1/settings",
+        json={"payday_setup_notice_dismissed": True},
+        headers=csrf_headers(client, first["csrf_token"]),
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["payday_setup_notice_dismissed"] is True
+
+    register(client, "second-notice@example.test", "Second")
+    assert client.get("/api/v1/settings").json()["payday_setup_notice_dismissed"] is False
+
+    login(client, "first-notice@example.test")
+    assert client.get("/api/v1/settings").json()["payday_setup_notice_dismissed"] is True
+
+
 def test_admin_account_management_is_role_guarded_and_never_returns_financial_data(
-    client: TestClient, db_session: Session
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     admin_data = register(client, "stage9-admin@example.test", "Administrator")
     target_data = register(client, "stage9-target@example.test", "Target User")
@@ -394,6 +573,13 @@ def test_admin_account_management_is_role_guarded_and_never_returns_financial_da
     assert client.get("/api/v1/admin/users").status_code == 403
     assert (
         client.post(
+            "/api/v1/admin/debug/sentry-error",
+            headers=csrf_headers(client, target_data["csrf_token"]),
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
             f"/api/v1/admin/users/{target_data['user']['id']}/sessions/revoke",
             headers=csrf_headers(client, target_data["csrf_token"]),
         ).status_code
@@ -402,6 +588,13 @@ def test_admin_account_management_is_role_guarded_and_never_returns_financial_da
 
     admin_session = login(client, "stage9-admin@example.test")
     headers = csrf_headers(client, admin_session["csrf_token"])
+    captured_errors: list[BaseException] = []
+    monkeypatch.setattr("app.api.admin.sentry_sdk.capture_exception", captured_errors.append)
+    sentry_test = client.post("/api/v1/admin/debug/sentry-error", headers=headers)
+    assert sentry_test.status_code == 204, sentry_test.text
+    assert len(captured_errors) == 1
+    assert str(captured_errors[0]) == "This is your first backend error!"
+
     listed = client.get("/api/v1/admin/users")
     assert listed.status_code == 200, listed.text
     target_listing = next(item for item in listed.json() if item["id"] == target_data["user"]["id"])
@@ -569,6 +762,8 @@ def test_admin_demo_data_is_self_scoped_and_idempotent(
         "transactions_deleted": 16,
         "budgets_deleted": 1,
         "category_budgets_deleted": 7,
+        "allowances_deleted": 0,
+        "schedules_deleted": 0,
     }
     assert client.get(f"/api/v1/transactions/{manual['id']}").status_code == 200
     assert not list(
@@ -585,7 +780,72 @@ def test_admin_demo_data_is_self_scoped_and_idempotent(
         "transactions_deleted": 0,
         "budgets_deleted": 0,
         "category_budgets_deleted": 0,
+        "allowances_deleted": 0,
+        "schedules_deleted": 0,
     }
+
+
+def test_admin_can_seed_four_completed_cutoff_cycles(
+    client: TestClient, db_session: Session
+) -> None:
+    admin_data = register(client, "cycle-demo-admin@example.test", "Cycle Demo Admin")
+    administrator = db_session.get(User, uuid.UUID(admin_data["user"]["id"]))
+    assert administrator is not None
+    administrator.role = UserRole.ADMIN
+    db_session.commit()
+    session = login(client, "cycle-demo-admin@example.test")
+    headers = csrf_headers(client, session["csrf_token"])
+
+    seeded = client.post("/api/v1/admin/debug/seed-completed-cycles", headers=headers)
+    assert seeded.status_code == 200, seeded.text
+    assert seeded.json() == {
+        "transactions_created": 32,
+        "budgets_created": 3,
+        "category_budgets_created": 21,
+        "schedules_created": 1,
+        "allowances_created": 4,
+    }
+    repeated = client.post("/api/v1/admin/debug/seed-completed-cycles", headers=headers)
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json() == {
+        "transactions_created": 0,
+        "budgets_created": 0,
+        "category_budgets_created": 0,
+        "schedules_created": 0,
+        "allowances_created": 0,
+    }
+
+    allowances = list(
+        db_session.scalars(
+            select(PaydayAllowance)
+            .where(PaydayAllowance.user_id == administrator.id)
+            .order_by(PaydayAllowance.period_start)
+        )
+    )
+    assert len(allowances) == 4
+    assert all(item.period_start < date.today() for item in allowances)
+    assert all(
+        (item.payday_schedule.first_day, item.payday_schedule.second_day) == (15, 30)
+        for item in allowances
+    )
+
+    cleared = client.delete("/api/v1/admin/debug/demo-data", headers=headers)
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json() == {
+        "transactions_deleted": 32,
+        "budgets_deleted": 3,
+        "category_budgets_deleted": 21,
+        "allowances_deleted": 4,
+        "schedules_deleted": 1,
+    }
+    assert not list(
+        db_session.scalars(
+            select(PaydayAllowance).where(PaydayAllowance.user_id == administrator.id)
+        )
+    )
+    assert not list(
+        db_session.scalars(select(PaydaySchedule).where(PaydaySchedule.user_id == administrator.id))
+    )
 
 
 def test_regular_user_can_clear_only_their_own_transactions(
@@ -638,6 +898,45 @@ def test_regular_user_can_clear_only_their_own_transactions(
     )
     assert event is not None
     assert event.metadata_json == {"deleted_count": 2}
+
+
+def test_bulk_delete_is_atomic_and_owner_scoped(client: TestClient, db_session: Session) -> None:
+    user_a = register(client, "bulk-a@example.test", "Bulk A")
+    category_a = category_for(db_session, user_a["user"]["id"])
+    first = create_transaction(
+        client, csrf_token=user_a["csrf_token"], category=category_a, name="First selected"
+    )
+    second = create_transaction(
+        client, csrf_token=user_a["csrf_token"], category=category_a, name="Second selected"
+    )
+
+    user_b = register(client, "bulk-b@example.test", "Bulk B")
+    category_b = category_for(db_session, user_b["user"]["id"])
+    other = create_transaction(
+        client, csrf_token=user_b["csrf_token"], category=category_b, name="Keep mine"
+    )
+    headers_b = csrf_headers(client, user_b["csrf_token"])
+
+    rejected = client.request(
+        "DELETE",
+        "/api/v1/transactions/bulk",
+        json={"transaction_ids": [first["id"], other["id"]]},
+        headers=headers_b,
+    )
+    assert rejected.status_code == 404
+    assert client.get(f"/api/v1/transactions/{other['id']}").status_code == 200
+
+    session_a = login(client, "bulk-a@example.test")
+    deleted = client.request(
+        "DELETE",
+        "/api/v1/transactions/bulk",
+        json={"transaction_ids": [first["id"], second["id"]]},
+        headers=csrf_headers(client, session_a["csrf_token"]),
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json() == {"transactions_deleted": 2}
+    assert client.get(f"/api/v1/transactions/{first['id']}").status_code == 404
+    assert client.get(f"/api/v1/transactions/{second['id']}").status_code == 404
 
 
 def test_login_rate_limit_uses_generic_failure_message(client: TestClient) -> None:

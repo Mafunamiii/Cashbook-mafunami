@@ -12,7 +12,7 @@ from app.db.models import AppearancePreference, ReportingMode, TransactionType, 
 class RegistrationRequest(BaseModel):
     email: str = Field(max_length=320)
     display_name: str = Field(min_length=1, max_length=120)
-    password: str = Field(min_length=12, max_length=256)
+    password: str = Field(min_length=8, max_length=256)
     invite_code: str | None = Field(default=None, min_length=1, max_length=256)
 
     @field_validator("email")
@@ -36,11 +36,11 @@ class LoginRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=256)
-    new_password: str = Field(min_length=12, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
 
 
 class TemporaryPasswordRequest(BaseModel):
-    temporary_password: str = Field(min_length=12, max_length=256)
+    temporary_password: str = Field(min_length=8, max_length=256)
 
 
 class UserResponse(BaseModel):
@@ -62,16 +62,27 @@ class RecoveryInfoResponse(BaseModel):
     message: str
 
 
+class DashboardSummaryPreferences(BaseModel):
+    inflow: bool = True
+    outflow: bool = True
+    profit_loss: bool = True
+    budget_used: bool = True
+
+
 class SettingsResponse(BaseModel):
     display_name: str
     email: str
     reporting_mode: ReportingMode
     appearance_preference: AppearancePreference
+    dashboard_summary: DashboardSummaryPreferences
+    payday_setup_notice_dismissed: bool
 
 
 class SettingsUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=120)
     appearance_preference: AppearancePreference | None = None
+    dashboard_summary: DashboardSummaryPreferences | None = None
+    payday_setup_notice_dismissed: bool | None = None
 
     @field_validator("display_name")
     @classmethod
@@ -113,10 +124,19 @@ class DebugSeedResponse(BaseModel):
     category_budgets_created: int
 
 
+class DebugCycleSeedResponse(DebugSeedResponse):
+    """Summary of completed payday-cycle demo records added to the caller."""
+
+    schedules_created: int
+    allowances_created: int
+
+
 class DebugClearResponse(BaseModel):
     transactions_deleted: int
     budgets_deleted: int
     category_budgets_deleted: int
+    allowances_deleted: int
+    schedules_deleted: int
 
 
 class CategoryResponse(BaseModel):
@@ -190,6 +210,10 @@ class TransactionDeletionResponse(BaseModel):
     transactions_deleted: int
 
 
+class TransactionBulkDeleteRequest(BaseModel):
+    transaction_ids: list[uuid.UUID] = Field(min_length=1, max_length=1_000)
+
+
 class StatementTransactionResponse(TransactionResponse):
     """A transaction row enriched for the statement presentation.
 
@@ -223,6 +247,7 @@ class PaydayAllowanceUpdateRequest(BaseModel):
 
 class CategoryBudgetUpdateRequest(BaseModel):
     amount_minor: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    reset_each_payday: bool | None = None
 
 
 class PaydayScheduleResponse(BaseModel):
@@ -250,6 +275,7 @@ class CategoryBudgetResponse(BudgetAllocationResponse):
     category_id: uuid.UUID
     category_name: str
     category_color: str
+    reset_each_payday: bool
 
 
 class BudgetCycleResponse(BudgetAllocationResponse):

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { budgetProgress } from "./budgetProgress";
+import {
+  budgetProgress,
+  categoryBudgetRemainingCopy,
+  categoryBudgetUsageCopy,
+} from "./budgetProgress";
 
 function progressAt(usagePercent: string, remainingMinor = 1) {
   return budgetProgress({
@@ -38,5 +42,30 @@ describe("budgetProgress", () => {
         usage_percent: null,
       }),
     ).toEqual({ percentage: 0, tone: "neutral", label: "Budget not set" });
+  });
+});
+
+describe("category budget copy", () => {
+  const formatMoney = (value: number | null) =>
+    value === null ? "Not set" : `PHP ${value}`;
+
+  it("shows the remaining amount as compact category context", () => {
+    expect(categoryBudgetRemainingCopy(3_000, formatMoney)).toBe(
+      "PHP 3000 left",
+    );
+  });
+
+  it("describes overspending without showing a negative remaining value", () => {
+    expect(categoryBudgetRemainingCopy(-500, formatMoney)).toBe("PHP 500 over");
+  });
+
+  it("does not describe an unset budget as remaining", () => {
+    expect(categoryBudgetRemainingCopy(null, formatMoney)).toBe("Not set");
+  });
+
+  it("keeps usage concise on the right side", () => {
+    expect(categoryBudgetUsageCopy(2_000, 5_000, formatMoney)).toBe(
+      "PHP 2000 / PHP 5000",
+    );
   });
 });

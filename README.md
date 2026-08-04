@@ -89,9 +89,10 @@ cd frontend && npm ci && npm run check && npm run test && npm run build
 
 New accounts receive four inflow and eight outflow presets. The category API
 supports custom inflow/outflow categories, curated colors, optional icon labels,
-editing, archive, and restore. `DELETE /api/v1/categories/{id}` remains a safe
-archive operation for compatibility; it never deletes a category or its
-historical transaction relationships.
+editing, archive, restore, and permanent deletion. Preset and custom categories
+follow the same rules. `DELETE /api/v1/categories/{id}` permanently deletes an
+unreferenced category; categories used by transactions or budgets must be
+archived so their historical relationships remain intact.
 
 ## Transaction management
 

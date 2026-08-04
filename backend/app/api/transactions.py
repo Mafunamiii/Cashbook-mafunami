@@ -13,6 +13,7 @@ from sqlalchemy import Select, case, delete, func, or_, select
 from app.api.dependencies import ActiveUser, CsrfProtectedUser, DatabaseSession, owned_by_user
 from app.api.schemas import (
     StatementTransactionResponse,
+    TransactionBulkDeleteRequest,
     TransactionCreateRequest,
     TransactionDeletionResponse,
     TransactionPageResponse,
@@ -310,6 +311,49 @@ def delete_all_transactions(
     )
     db.commit()
     return TransactionDeletionResponse(transactions_deleted=deleted_count)
+
+
+@router.delete("/bulk", response_model=TransactionDeletionResponse)
+def delete_transactions_bulk(
+    payload: TransactionBulkDeleteRequest,
+    request: Request,
+    current_user: CsrfProtectedUser,
+    db: DatabaseSession,
+) -> TransactionDeletionResponse:
+    """Atomically delete a bounded set of transactions owned by the caller."""
+    transaction_ids = set(payload.transaction_ids)
+    owned_ids = set(
+        db.scalars(
+            select(Transaction.id).where(
+                Transaction.user_id == current_user.id,
+                Transaction.id.in_(transaction_ids),
+            )
+        )
+    )
+    if owned_ids != transaction_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or more transactions were not found.",
+        )
+    db.execute(
+        delete(Transaction).where(
+            Transaction.user_id == current_user.id,
+            Transaction.id.in_(owned_ids),
+        )
+    )
+    db.add(
+        AuditEvent(
+            actor_user_id=current_user.id,
+            subject_user_id=current_user.id,
+            event_type="transaction.bulk_deleted",
+            resource_type="transaction",
+            metadata_json={"deleted_count": len(owned_ids)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent", "")[:512] or None,
+        )
+    )
+    db.commit()
+    return TransactionDeletionResponse(transactions_deleted=len(owned_ids))
 
 
 @router.get("/{transaction_id}", response_model=TransactionResponse)

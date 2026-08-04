@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiRequest } from "./api";
 import type { User } from "./api";
@@ -142,35 +142,24 @@ export function App() {
     }
   }
 
-  const links = [
+  const links: [string, string][] = [
     ["/dashboard", "Dashboard"],
     ["/records", "Records"],
     ["/categories", "Categories"],
     ["/budgets", "Budget"],
     ["/settings", "Settings"],
-    ...(user.role === "admin" ? [["/admin/users", "Admin"]] : []),
   ];
+  if (user.role === "admin") links.push(["/admin/users", "Admin"]);
   return (
     <>
-      <nav className="app-nav" aria-label="Primary navigation">
-        {links.map(([href, label]) => (
-          <button
-            className={effectivePath === href ? "active" : ""}
-            key={href}
-            onClick={() => navigate(href)}
-            type="button"
-          >
-            {label}
-          </button>
-        ))}
-        <span className="nav-spacer" />
-        <span className="nav-user" title={user.email}>
-          {user.display_name}
-        </span>
-        <button onClick={() => void logout()} type="button">
-          Sign out
-        </button>
-      </nav>
+      <AppNavigation
+        activePath={effectivePath}
+        email={user.email}
+        links={links}
+        onLogout={() => void logout()}
+        onNavigate={navigate}
+        userName={user.display_name}
+      />
       {effectivePath === "/records" ? (
         <RecordsPage />
       ) : effectivePath === "/categories" ? (
@@ -191,6 +180,124 @@ export function App() {
           onViewRecords={() => navigate("/records")}
         />
       )}
+    </>
+  );
+}
+
+function AppNavigation({
+  activePath,
+  email,
+  links,
+  onLogout,
+  onNavigate,
+  userName,
+}: {
+  activePath: string;
+  email: string;
+  links: [string, string][];
+  onLogout: () => void;
+  onNavigate: (path: string) => void;
+  userName: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const firstLinkRef = useRef<HTMLButtonElement>(null);
+  const activeLabel =
+    links.find(([path]) => path === activePath)?.[1] ?? "NamiCash";
+
+  useEffect(() => {
+    if (!isOpen) return;
+    firstLinkRef.current?.focus();
+    const closeOnOutsideInteraction = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+        toggleRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsideInteraction);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideInteraction);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [isOpen]);
+
+  const navigationButtons = (mobile = false) =>
+    links.map(([href, label], index) => (
+      <button
+        className={activePath === href ? "active" : ""}
+        key={href}
+        onClick={() => {
+          setIsOpen(false);
+          onNavigate(href);
+        }}
+        ref={mobile && index === 0 ? firstLinkRef : undefined}
+        type="button"
+      >
+        {label}
+      </button>
+    ));
+
+  return (
+    <>
+      <nav className="app-nav desktop-nav" aria-label="Primary navigation">
+        {navigationButtons()}
+        <span className="nav-spacer" />
+        <span className="nav-user" title={email}>
+          {userName}
+        </span>
+        <button onClick={onLogout} type="button">
+          Sign out
+        </button>
+      </nav>
+      <div className="mobile-nav" ref={containerRef}>
+        <div className="mobile-nav-bar">
+          <div>
+            <span>NamiCash</span>
+            <strong>{activeLabel}</strong>
+          </div>
+          <button
+            aria-controls="mobile-navigation-menu"
+            aria-expanded={isOpen}
+            aria-label={
+              isOpen ? "Close navigation menu" : "Open navigation menu"
+            }
+            className="mobile-menu-toggle"
+            onClick={() => setIsOpen((open) => !open)}
+            ref={toggleRef}
+            type="button"
+          >
+            <span aria-hidden="true">{isOpen ? "×" : "☰"}</span>
+          </button>
+        </div>
+        {isOpen && (
+          <nav
+            aria-label="Mobile primary navigation"
+            className="mobile-nav-menu"
+            id="mobile-navigation-menu"
+          >
+            {navigationButtons(true)}
+            <div className="mobile-nav-account">
+              <span title={email}>{userName}</span>
+              <button
+                onClick={() => {
+                  setIsOpen(false);
+                  onLogout();
+                }}
+                type="button"
+              >
+                Sign out
+              </button>
+            </div>
+          </nav>
+        )}
+      </div>
     </>
   );
 }

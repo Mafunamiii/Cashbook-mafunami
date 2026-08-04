@@ -37,6 +37,7 @@ type Cycle = Allocation & {
     category_id: string;
     category_name: string;
     category_color: string;
+    reset_each_payday: boolean;
   })[];
 };
 
@@ -221,7 +222,11 @@ export function BudgetSettingsPage() {
     }
   }
 
-  async function saveCategoryBudget(categoryId: string, amountMinor: string) {
+  async function saveCategoryBudget(
+    categoryId: string,
+    amountMinor: string,
+    resetEachPayday: boolean,
+  ) {
     const parsedAmount = toMinorUnits(amountMinor);
     if (parsedAmount === null)
       return setNotice(
@@ -230,7 +235,10 @@ export function BudgetSettingsPage() {
     try {
       await request(`/budgets/${monthStart}/categories/${categoryId}`, {
         method: "PUT",
-        body: JSON.stringify({ amount_minor: parsedAmount }),
+        body: JSON.stringify({
+          amount_minor: parsedAmount,
+          reset_each_payday: resetEachPayday,
+        }),
       });
       setNotice("Category allocation saved.");
       await load();
@@ -303,17 +311,20 @@ export function BudgetSettingsPage() {
           </div>
           <p className="hint">
             These are outflow-only subdivisions of the monthly envelope.
-            Overspending is shown but never blocked.
+            Overspending is shown but never blocked. Optional payday resets
+            preserve the prior cycle and start the next allocation at zero.
           </p>
           {cycle?.category_budgets.map((category) => (
             <form
               className="allocation-row"
-              key={category.category_id}
+              key={`${category.category_id}-${category.amount_minor}-${category.reset_each_payday}`}
               onSubmit={(event) => {
                 event.preventDefault();
+                const formData = new FormData(event.currentTarget);
                 void saveCategoryBudget(
                   category.category_id,
-                  new FormData(event.currentTarget).get("amount") as string,
+                  formData.get("amount") as string,
+                  formData.get("reset") === "on",
                 );
               }}
             >
@@ -336,6 +347,15 @@ export function BudgetSettingsPage() {
                 pattern="[0-9]+([.][0-9]{1,2})?"
                 required
               />
+              <label className="allocation-reset-toggle">
+                <input
+                  defaultChecked={category.reset_each_payday}
+                  disabled={!paydaySchedule}
+                  name="reset"
+                  type="checkbox"
+                />
+                Reset each payday
+              </label>
               <button className="text-button" type="submit">
                 Save
               </button>

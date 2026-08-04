@@ -37,7 +37,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: ["sh", "-c", "python scripts/validate_environment.py && alembic upgrade head"]
+    command: ["sh", "-c", "python -m scripts.validate_environment && alembic upgrade head"]
     restart: "no"
     profiles: ["migration"]
 
@@ -68,6 +68,8 @@ services:
         VITE_SENTRY_RELEASE: ${SENTRY_RELEASE:-}
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-8080}:8080"
+      - "${LAN_BIND_IP:?Set LAN_BIND_IP in .env}:${FRONTEND_PORT:-8080}:8080"
+      - "${TAILSCALE_BIND_IP:?Set TAILSCALE_BIND_IP in .env}:${FRONTEND_PORT:-8080}:8080"
     depends_on:
       backend:
         condition: service_healthy

@@ -2,7 +2,7 @@ import { useEffect, useId, useState } from "react";
 import type { FormEvent } from "react";
 
 import type { Category, CategoryType } from "../categories/categoryModel";
-import { localToday } from "./transactionModel";
+import { localToday, toMinorUnits } from "./transactionModel";
 
 type TransactionForm = {
   name: string;
@@ -124,9 +124,9 @@ export function AddTransaction({ onSaved }: { onSaved?: () => void }) {
       setError("Choose a category.");
       return;
     }
-    const amountMinor = Number(form.amount_minor);
-    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
-      setError("Amount must be a positive whole number of minor units.");
+    const amountMinor = toMinorUnits(form.amount_minor);
+    if (amountMinor === null) {
+      setError("Enter a valid amount with up to two decimal places.");
       return;
     }
     setIsSaving(true);
@@ -247,17 +247,17 @@ export function AddTransaction({ onSaved }: { onSaved?: () => void }) {
                 </select>
               </label>
               <label>
-                Amount <span className="hint">minor units</span>
+                Amount <span className="hint">PHP</span>
                 <input
-                  inputMode="numeric"
-                  min="1"
+                  inputMode="decimal"
+                  min="0.01"
                   onChange={(event) =>
                     setForm({ ...form, amount_minor: event.target.value })
                   }
-                  pattern="[0-9]+"
-                  placeholder="e.g. 12500"
+                  placeholder="e.g. 200 or 200.50"
+                  step="0.01"
                   required
-                  type="text"
+                  type="number"
                   value={form.amount_minor}
                 />
               </label>

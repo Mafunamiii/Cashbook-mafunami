@@ -6,6 +6,27 @@ export type BudgetProgressInput = {
 
 export type BudgetProgressTone = "neutral" | "safe" | "warning" | "danger";
 
+export function categoryBudgetRemainingCopy(
+  remainingMinor: number | null,
+  formatMoney: (value: number | null) => string,
+) {
+  if (remainingMinor === null) {
+    return formatMoney(null);
+  }
+
+  return remainingMinor < 0
+    ? `${formatMoney(Math.abs(remainingMinor))} over`
+    : `${formatMoney(remainingMinor)} left`;
+}
+
+export function categoryBudgetUsageCopy(
+  usedMinor: number,
+  amountMinor: number | null,
+  formatMoney: (value: number | null) => string,
+) {
+  return `${formatMoney(usedMinor)} / ${formatMoney(amountMinor)}`;
+}
+
 export function budgetProgress(summary: BudgetProgressInput) {
   if (summary.remaining_minor === null) {
     return {

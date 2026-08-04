@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from app.api.dependencies import ActiveUser, CsrfProtectedUser, DatabaseSession, owned_by_user
 from app.api.schemas import CategoryCreateRequest, CategoryResponse, CategoryUpdateRequest
 from app.core.security import utc_now
-from app.db.models import AuditEvent, Category
+from app.db.models import AuditEvent, Category, CategoryBudget, Transaction
 
 router = APIRouter(prefix="/api/v1/categories", tags=["categories"])
 
@@ -179,7 +179,41 @@ def update_category(
 
 
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
-def archive_category(
+def delete_category(
+    category_id: uuid.UUID,
+    request: Request,
+    current_user: CsrfProtectedUser,
+    db: DatabaseSession,
+) -> Response:
+    category = _owned_category_or_404(db, category_id, current_user.id)
+    has_transactions = db.scalar(
+        select(Transaction.id).where(
+            Transaction.user_id == current_user.id,
+            Transaction.category_id == category.id,
+        )
+    )
+    has_budgets = db.scalar(
+        select(CategoryBudget.id).where(
+            CategoryBudget.user_id == current_user.id,
+            CategoryBudget.category_id == category.id,
+        )
+    )
+    if has_transactions is not None or has_budgets is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This category is used by transactions or budgets. "
+                "Archive it to preserve those records."
+            ),
+        )
+    _audit_category_event(db, event_type="category.deleted", category=category, request=request)
+    db.delete(category)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{category_id}/archive", status_code=status.HTTP_204_NO_CONTENT)
+def archive_category_explicit(
     category_id: uuid.UUID,
     request: Request,
     current_user: CsrfProtectedUser,
@@ -193,16 +227,6 @@ def archive_category(
         )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.post("/{category_id}/archive", status_code=status.HTTP_204_NO_CONTENT)
-def archive_category_explicit(
-    category_id: uuid.UUID,
-    request: Request,
-    current_user: CsrfProtectedUser,
-    db: DatabaseSession,
-) -> Response:
-    return archive_category(category_id, request, current_user, db)
 
 
 @router.post("/{category_id}/restore", response_model=CategoryResponse)

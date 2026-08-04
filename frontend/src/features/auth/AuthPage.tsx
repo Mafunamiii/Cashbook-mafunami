@@ -19,6 +19,8 @@ export function AuthPage({
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [inviteCode, setInviteCode] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -137,28 +139,50 @@ export function AuthPage({
         </label>
         <label>
           Password{" "}
-          {signingUp && <span className="hint">at least 12 characters</span>}
-          <input
-            autoComplete={signingUp ? "new-password" : "current-password"}
-            minLength={signingUp ? 12 : 1}
-            required
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
+          {signingUp && <span className="hint">at least 8 characters</span>}
+          <span className="password-input">
+            <input
+              autoComplete={signingUp ? "new-password" : "current-password"}
+              minLength={signingUp ? 8 : 1}
+              required
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+            <button
+              aria-label={`${showPassword ? "Hide" : "Show"} password`}
+              aria-pressed={showPassword}
+              className="password-toggle"
+              type="button"
+              onClick={() => setShowPassword((visible) => !visible)}
+            >
+              {showPassword ? "Hide" : "Show"}
+            </button>
+          </span>
         </label>
         {signingUp && (
           <>
             <label>
               Confirm password
-              <input
-                autoComplete="new-password"
-                minLength={12}
-                required
-                type="password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-              />
+              <span className="password-input">
+                <input
+                  autoComplete="new-password"
+                  minLength={8}
+                  required
+                  type={showConfirmPassword ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                />
+                <button
+                  aria-label={`${showConfirmPassword ? "Hide" : "Show"} password confirmation`}
+                  aria-pressed={showConfirmPassword}
+                  className="password-toggle"
+                  type="button"
+                  onClick={() => setShowConfirmPassword((visible) => !visible)}
+                >
+                  {showConfirmPassword ? "Hide" : "Show"}
+                </button>
+              </span>
             </label>
             <label>
               Invite code <span className="hint">if required</span>

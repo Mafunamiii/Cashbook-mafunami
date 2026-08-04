@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/react";
 import { useCallback, useEffect, useState } from "react";
 
 type AdminUser = {
@@ -11,6 +12,44 @@ type AdminUser = {
 };
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
+
+function FrontendErrorButton({
+  onError,
+  onSent,
+}: {
+  onError: (message: string) => void;
+  onSent: (message: string) => void;
+}) {
+  const [isSending, setIsSending] = useState(false);
+
+  async function sendError() {
+    setIsSending(true);
+    onError("");
+    const eventId = Sentry.captureException(
+      new Error("This is your first frontend error!"),
+    );
+    const sent = await Sentry.flush(5_000);
+    if (sent) {
+      onSent(`Frontend test error sent to Sentry. Event ID: ${eventId}`);
+    } else {
+      onError(
+        "The frontend Sentry request timed out. Check browser tracking protection, ad blockers, and the Network tab.",
+      );
+    }
+    setIsSending(false);
+  }
+
+  return (
+    <button
+      className="text-button danger-button"
+      disabled={isSending}
+      onClick={() => void sendError()}
+      type="button"
+    >
+      {isSending ? "Sending frontend error…" : "Send frontend test error"}
+    </button>
+  );
+}
 
 function csrfToken(): string | undefined {
   return document.cookie
@@ -52,7 +91,26 @@ export function AdminUsersPage() {
     value: string;
   } | null>(null);
   const [isSeeding, setIsSeeding] = useState(false);
+  const [isSeedingCycles, setIsSeedingCycles] = useState(false);
   const [isClearingDemo, setIsClearingDemo] = useState(false);
+  const [isSendingBackendError, setIsSendingBackendError] = useState(false);
+
+  async function sendBackendError() {
+    setIsSendingBackendError(true);
+    setError(null);
+    try {
+      await request<void>("/admin/debug/sentry-error", { method: "POST" });
+      setNotice("Backend test error sent to Sentry.");
+    } catch (sendError) {
+      setError(
+        sendError instanceof Error
+          ? sendError.message
+          : "Unable to send the backend test error.",
+      );
+    } finally {
+      setIsSendingBackendError(false);
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -147,7 +205,7 @@ export function AdminUsersPage() {
   async function clearMyDemoData() {
     if (
       !window.confirm(
-        "Remove all data created by the debugger from your administrator account? Your other records will be preserved.",
+        "Remove all regular and cutoff-cycle data created by the debugger from your administrator account? Your other records will be preserved.",
       )
     ) {
       return;
@@ -159,14 +217,18 @@ export function AdminUsersPage() {
         transactions_deleted: number;
         budgets_deleted: number;
         category_budgets_deleted: number;
+        allowances_deleted: number;
+        schedules_deleted: number;
       }>("/admin/debug/demo-data", { method: "DELETE" });
       const deleted =
         result.transactions_deleted +
         result.budgets_deleted +
-        result.category_budgets_deleted;
+        result.category_budgets_deleted +
+        result.allowances_deleted +
+        result.schedules_deleted;
       setNotice(
         deleted
-          ? `Demo data cleared: ${result.transactions_deleted} transactions, ${result.budgets_deleted} monthly budget, and ${result.category_budgets_deleted} category budgets removed.`
+          ? `Demo data cleared: ${result.transactions_deleted} transactions, ${result.budgets_deleted} monthly budgets, ${result.category_budgets_deleted} category budgets, ${result.allowances_deleted} cutoff allowances, and ${result.schedules_deleted} cutoff schedules removed.`
           : "There is no debugger-created data to clear.",
       );
     } catch (actionError) {
@@ -177,6 +239,44 @@ export function AdminUsersPage() {
       );
     } finally {
       setIsClearingDemo(false);
+    }
+  }
+
+  async function seedCompletedCycles() {
+    if (
+      !window.confirm(
+        "Add the four most recent completed 15th/30th cutoff cycles (about two months) to your administrator account? Existing data will not be replaced.",
+      )
+    ) {
+      return;
+    }
+    setIsSeedingCycles(true);
+    setError(null);
+    try {
+      const result = await request<{
+        transactions_created: number;
+        budgets_created: number;
+        category_budgets_created: number;
+        schedules_created: number;
+        allowances_created: number;
+      }>("/admin/debug/seed-completed-cycles", { method: "POST" });
+      const created = Object.values(result).reduce(
+        (total, count) => total + count,
+        0,
+      );
+      setNotice(
+        created
+          ? `Cutoff-cycle demo added: ${result.transactions_created} transactions across four completed cycles and ${result.allowances_created} allowances.`
+          : "Your account already has the completed cutoff-cycle demo data.",
+      );
+    } catch (actionError) {
+      setError(
+        actionError instanceof Error
+          ? actionError.message
+          : "Unable to add cutoff-cycle demo data.",
+      );
+    } finally {
+      setIsSeedingCycles(false);
     }
   }
 
@@ -237,19 +337,43 @@ export function AdminUsersPage() {
         <div className="admin-debug-actions">
           <button
             className="secondary-button"
-            disabled={isSeeding || isClearingDemo}
+            disabled={isSeeding || isSeedingCycles || isClearingDemo}
             onClick={() => void seedMyAccount()}
             type="button"
           >
             {isSeeding ? "Adding demo data…" : "Fill my account with demo data"}
           </button>
           <button
+            className="secondary-button"
+            disabled={isSeeding || isSeedingCycles || isClearingDemo}
+            onClick={() => void seedCompletedCycles()}
+            type="button"
+          >
+            {isSeedingCycles
+              ? "Adding completed cycles…"
+              : "Add completed cutoff-cycle demo"}
+          </button>
+          <button
             className="text-button danger-button"
-            disabled={isSeeding || isClearingDemo}
+            disabled={isSeeding || isSeedingCycles || isClearingDemo}
             onClick={() => void clearMyDemoData()}
             type="button"
           >
             {isClearingDemo ? "Clearing demo data…" : "Clear demo data"}
+          </button>
+          <FrontendErrorButton
+            onError={(message) => setError(message || null)}
+            onSent={setNotice}
+          />
+          <button
+            className="text-button danger-button"
+            disabled={isSendingBackendError}
+            onClick={() => void sendBackendError()}
+            type="button"
+          >
+            {isSendingBackendError
+              ? "Sending backend error…"
+              : "Send backend test error"}
           </button>
         </div>
       </section>

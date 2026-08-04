@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.api.dependencies import ActiveUser, CsrfProtectedUser, DatabaseSession
-from app.api.schemas import SettingsResponse, SettingsUpdateRequest
+from app.api.schemas import DashboardSummaryPreferences, SettingsResponse, SettingsUpdateRequest
 from app.db.models import AuditEvent, UserPreferences
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
@@ -28,6 +28,13 @@ def _response(user, preferences: UserPreferences) -> SettingsResponse:
         email=user.email,
         reporting_mode=preferences.reporting_mode,
         appearance_preference=preferences.appearance_preference,
+        dashboard_summary=DashboardSummaryPreferences(
+            inflow=preferences.dashboard_show_inflow,
+            outflow=preferences.dashboard_show_outflow,
+            profit_loss=preferences.dashboard_show_profit_loss,
+            budget_used=preferences.dashboard_show_budget_used,
+        ),
+        payday_setup_notice_dismissed=preferences.payday_setup_notice_dismissed,
     )
 
 
@@ -43,7 +50,12 @@ def update_settings(
     current_user: CsrfProtectedUser,
     db: DatabaseSession,
 ) -> SettingsResponse:
-    if payload.display_name is None and payload.appearance_preference is None:
+    if (
+        payload.display_name is None
+        and payload.appearance_preference is None
+        and payload.dashboard_summary is None
+        and payload.payday_setup_notice_dismissed is None
+    ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="No settings supplied."
         )
@@ -53,6 +65,13 @@ def update_settings(
         current_user.display_name = payload.display_name.strip()
     if payload.appearance_preference is not None:
         preferences.appearance_preference = payload.appearance_preference
+    if payload.dashboard_summary is not None:
+        preferences.dashboard_show_inflow = payload.dashboard_summary.inflow
+        preferences.dashboard_show_outflow = payload.dashboard_summary.outflow
+        preferences.dashboard_show_profit_loss = payload.dashboard_summary.profit_loss
+        preferences.dashboard_show_budget_used = payload.dashboard_summary.budget_used
+    if payload.payday_setup_notice_dismissed is not None:
+        preferences.payday_setup_notice_dismissed = payload.payday_setup_notice_dismissed
     db.add(
         AuditEvent(
             actor_user_id=current_user.id,

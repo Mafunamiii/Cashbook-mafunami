@@ -142,6 +142,8 @@ class Category(Timestamped, Base):
         Enum(TransactionType, name="transaction_type", values_callable=enum_values), nullable=False
     )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    budget_reset_each_payday: Mapped[bool] = mapped_column(nullable=False, default=False)
+    budget_reset_anchor: Mapped[date | None] = mapped_column(Date)
 
     user: Mapped[User] = relationship(back_populates="categories")
     transactions: Mapped[list[Transaction]] = relationship(
@@ -284,6 +286,35 @@ class CategoryBudget(Timestamped, Base):
     amount_minor: Mapped[int] = mapped_column(BIGINT, nullable=False)
 
 
+class CategoryBudgetResetHistory(Timestamped, Base):
+    """Snapshot an allocation before an automatic payday-cycle reset."""
+
+    __tablename__ = "category_budget_reset_history"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "category_id",
+            "period_start",
+            name="uq_category_budget_reset_history_user_category_period",
+        ),
+        CheckConstraint(
+            "amount_minor >= 0", name="ck_category_budget_reset_history_nonnegative_amount"
+        ),
+        ForeignKeyConstraint(
+            ["user_id", "category_id"],
+            ["categories.user_id", "categories.id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    category_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BIGINT, nullable=False)
+
+
 class UserPreferences(Timestamped, Base):
     __tablename__ = "user_preferences"
 
@@ -306,6 +337,11 @@ class UserPreferences(Timestamped, Base):
         nullable=False,
         default=AppearancePreference.SYSTEM,
     )
+    dashboard_show_inflow: Mapped[bool] = mapped_column(nullable=False, default=True)
+    dashboard_show_outflow: Mapped[bool] = mapped_column(nullable=False, default=True)
+    dashboard_show_profit_loss: Mapped[bool] = mapped_column(nullable=False, default=True)
+    dashboard_show_budget_used: Mapped[bool] = mapped_column(nullable=False, default=True)
+    payday_setup_notice_dismissed: Mapped[bool] = mapped_column(nullable=False, default=False)
 
     user: Mapped[User] = relationship(back_populates="preferences")
 
