@@ -2,6 +2,8 @@ import { useEffect, useId, useState } from "react";
 import type { FormEvent } from "react";
 
 import type { Category, CategoryType } from "../categories/categoryModel";
+import { currencyByCode, useCurrencies } from "./currency";
+import type { CurrencyCode } from "./currency";
 import { localToday, toMinorUnits } from "./transactionModel";
 
 type TransactionForm = {
@@ -9,6 +11,7 @@ type TransactionForm = {
   transaction_type: CategoryType;
   category_id: string;
   amount_minor: string;
+  currency_code: CurrencyCode;
   transaction_date: string;
   notes: string;
 };
@@ -22,12 +25,15 @@ function csrfToken(): string | undefined {
     ?.split("=")[1];
 }
 
-function initialForm(): TransactionForm {
+// This helper is exported for focused form-state tests; it is not a component.
+// eslint-disable-next-line react-refresh/only-export-components
+export function initialForm(currencyCode: CurrencyCode = "PHP"): TransactionForm {
   return {
     name: "",
     transaction_type: "outflow",
     category_id: "",
     amount_minor: "",
+    currency_code: currencyCode,
     transaction_date: localToday(),
     notes: "",
   };
@@ -61,10 +67,13 @@ export function AddTransaction({ onSaved }: { onSaved?: () => void }) {
   const [open, setOpen] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [form, setForm] = useState<TransactionForm>(initialForm);
+  const [baseCurrency, setBaseCurrency] = useState<CurrencyCode>("PHP");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const { currencies, error: currenciesError } = useCurrencies();
+  const selectedCurrency = currencyByCode(currencies, form.currency_code);
 
   const availableCategories = categories.filter(
     (category) =>
@@ -75,14 +84,29 @@ export function AddTransaction({ onSaved }: { onSaved?: () => void }) {
   useEffect(() => {
     if (!open) return;
     let active = true;
-    fetch(`${apiBaseUrl}/api/v1/categories`, { credentials: "include" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Unable to load categories.");
-        return (await response.json()) as Category[];
+    Promise.all([
+      fetch(`${apiBaseUrl}/api/v1/categories`, { credentials: "include" }),
+      fetch(`${apiBaseUrl}/api/v1/settings`, { credentials: "include" }),
+    ])
+      .then(async ([categoriesResponse, settingsResponse]) => {
+        if (!categoriesResponse.ok || !settingsResponse.ok)
+          throw new Error("Unable to load transaction options.");
+        const settings = (await settingsResponse.json()) as {
+          currency_code: CurrencyCode;
+        };
+        return {
+          categories: (await categoriesResponse.json()) as Category[],
+          settings,
+        };
       })
-      .then((result) => {
+      .then(({ categories: result, settings }) => {
         if (!active) return;
         setCategories(result);
+        setBaseCurrency(settings.currency_code);
+        setForm((current) => ({
+          ...current,
+          currency_code: settings.currency_code,
+        }));
         setError(null);
       })
       .catch((requestError: unknown) => {
@@ -103,7 +127,7 @@ export function AddTransaction({ onSaved }: { onSaved?: () => void }) {
   }, [open]);
 
   function openForm() {
-    setForm(initialForm());
+    setForm(initialForm(baseCurrency));
     setError(null);
     setNotice(null);
     setIsLoading(true);
@@ -124,9 +148,9 @@ export function AddTransaction({ onSaved }: { onSaved?: () => void }) {
       setError("Choose a category.");
       return;
     }
-    const amountMinor = toMinorUnits(form.amount_minor);
+    const amountMinor = toMinorUnits(form.amount_minor, selectedCurrency.minor_unit);
     if (amountMinor === null) {
-      setError("Enter a valid amount with up to two decimal places.");
+      setError(`Enter a valid amount with up to ${selectedCurrency.minor_unit} decimal places.`);
       return;
     }
     setIsSaving(true);
@@ -197,6 +221,7 @@ export function AddTransaction({ onSaved }: { onSaved?: () => void }) {
                   {error}
                 </p>
               )}
+              {currenciesError && <p className="form-error" role="alert">{currenciesError}</p>}
               <label>
                 Transaction name
                 <input
@@ -247,15 +272,36 @@ export function AddTransaction({ onSaved }: { onSaved?: () => void }) {
                 </select>
               </label>
               <label>
-                Amount <span className="hint">PHP</span>
+                Currency
+                <select
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      currency_code: event.target.value as CurrencyCode,
+                    })
+                  }
+                  value={form.currency_code}
+                >
+                  {!currencies.some((currency) => currency.code === form.currency_code) && (
+                    <option value={form.currency_code}>{form.currency_code}</option>
+                  )}
+                  {currencies.map((currency) => (
+                    <option key={currency.code} value={currency.code}>
+                      {currency.code} — {currency.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Amount <span className="hint">{form.currency_code}</span>
                 <input
                   inputMode="decimal"
-                  min="0.01"
+                  min={selectedCurrency.minor_unit ? `0.${"0".repeat(selectedCurrency.minor_unit - 1)}1` : "1"}
                   onChange={(event) =>
                     setForm({ ...form, amount_minor: event.target.value })
                   }
-                  placeholder="e.g. 200 or 200.50"
-                  step="0.01"
+                  placeholder={selectedCurrency.minor_unit === 0 ? "e.g. 200" : "e.g. 200.50"}
+                  step={selectedCurrency.minor_unit ? `0.${"0".repeat(selectedCurrency.minor_unit - 1)}1` : "1"}
                   required
                   type="number"
                   value={form.amount_minor}

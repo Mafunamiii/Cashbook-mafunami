@@ -1,147 +1,315 @@
-# Repository Guidelines
+# AGENTS.md
 
-## Project Structure & Module Organization
+## Purpose
 
-Backend code lives in `backend/app/`: routes are under `api/`, shared utilities under `core/`, persistence under `db/`, and financial rules under `domain/`. Alembic migrations are in `backend/alembic/versions/`; tests live in `backend/tests/`, including `domain/` and `integration/`.
+Work efficiently on this repository with minimal unnecessary token usage.
 
-The React/Vite client lives in `frontend/src/`, with components and models grouped under `features/`. Frontend tests sit beside code as `*.test.ts` or `*.test.tsx`.
+Prioritize:
 
-Operational guidance belongs in `docs/`, and maintenance utilities in `scripts/`.
+1. Correctness
+2. Minimal, targeted changes
+3. Preservation of existing behavior
+4. Low token/output overhead
 
-Before modifying a feature, inspect the relevant route, schema/model, domain logic, frontend component/model, and existing tests. Reuse existing conventions rather than introducing parallel patterns.
+Avoid broad rewrites, speculative refactors, and verbose explanations unless explicitly requested.
 
-## Build, Test, and Development Commands
+---
 
-* `cp .env.example .env` creates local configuration; replace placeholder secrets.
-* `docker compose up --build` starts PostgreSQL, FastAPI, and the frontend.
-* `docker compose down` stops services without deleting database data.
-* `cd backend && python -m pytest` runs backend tests with coverage reporting.
-* `cd backend && python -m ruff check . && python -m ruff format --check .` checks Python lint and formatting.
-* `cd frontend && npm ci && npm run check && npm run test && npm run build` installs locked dependencies, checks style, runs Vitest, and verifies the production build.
-* `cd frontend && npm run dev` starts the Vite development server.
+## Repository Workflow
 
-For targeted work, run the narrowest relevant tests first, then run the full verification commands before considering the task complete.
+Before changing code:
 
-Do not change tests solely to make an incorrect implementation pass. Distinguish pre-existing failures from failures introduced by the current change.
+1. Inspect only the files relevant to the requested task.
+2. Use targeted search (`rg`, `git grep`, specific file reads) before broad repository exploration.
+3. Follow existing architecture, naming, patterns, and conventions.
+4. Identify the smallest safe implementation surface.
+5. Check existing tests and nearby behavior before introducing new abstractions.
 
-## Coding Style & Naming Conventions
+Do not scan or summarize the entire repository unless the task genuinely requires it.
 
-Python targets 3.11, uses four-space indentation, double quotes, a 100-character line target, and Ruff rules `E`, `F`, `I`, and `UP`.
+Prefer targeted file/symbol inspection over dumping large files into context.
 
-Use `snake_case` for Python modules/functions and `PascalCase` for classes.
+---
 
-TypeScript and TSX use two-space indentation and Prettier defaults. Name React components and component files in `PascalCase`; use `camelCase` for functions, variables, hooks, and model utilities.
+## Change Policy
 
-Keep business and financial rules in domain/model modules rather than duplicating calculations in UI components or route handlers.
+Make the smallest change that fully solves the task.
 
-Prefer narrow changes over broad refactors. Do not rewrite working architecture for stylistic reasons unless explicitly requested.
+Do not:
 
-## Financial and Dashboard Semantics
+* Refactor unrelated code.
+* Rename unrelated symbols.
+* Reformat entire files.
+* Change architecture without a concrete need.
+* Add dependencies when existing tools can solve the problem.
+* Introduce abstractions for hypothetical future use.
+* Remove existing behavior unless explicitly requested.
+* Modify public/API behavior unless required by the task.
 
-Persisted monetary values and financial calculations must preserve the project's existing monetary representation and rounding conventions.
+Preserve backward compatibility whenever practical.
 
-Changes to balances, budgets, category spending, profit/loss, reporting periods, or payday calculations are regression-sensitive and require focused tests.
+If the task can be solved locally, keep it local.
 
-Presentation-only controls must not silently alter API queries, financial calculations, reporting periods, chart inputs, or unrelated dashboard state.
+---
 
-Configured budgets with no matching transactions are still valid budgets and must not disappear merely because aggregate transaction results contain no row for them.
+## Existing Behavior
 
-For remaining-budget displays:
+Treat current repository behavior as intentional unless there is clear evidence otherwise.
 
-* zero spending should preserve the full configured budget as remaining
-* overspending should be represented explicitly rather than as a negative remaining amount
-* existing warning/danger semantics should remain consistent unless the task explicitly changes them
+Before modifying an existing flow:
 
-## Frontend and Responsive Behavior
+* Identify its callers.
+* Identify relevant tests.
+* Check whether compatibility behavior or fallback logic exists.
+* Preserve existing semantics unless the task explicitly changes them.
 
-Reuse existing breakpoints, layout primitives, components, and visual conventions where practical.
+When optimizing performance, do not silently change functional behavior.
 
-Desktop behavior must remain unchanged when a task is explicitly scoped to mobile.
+---
 
-Interactive controls must support keyboard operation and appropriate ARIA relationships. Menus, popovers, dialogs, and similar transient UI should implement expected dismissal behavior such as Escape and outside interaction where applicable.
+## Investigation Strategy
 
-Use touch-friendly targets for mobile controls.
+Use the narrowest useful investigation.
 
-Avoid persistence mechanisms such as `localStorage` when the task explicitly defers persistence or requires future account-scoped storage.
+Preferred order:
 
-Do not introduce backend or database changes for component-local UI state unless explicitly required.
+1. `rg` / `git grep` for relevant terms and symbols.
+2. Inspect the directly related functions/files.
+3. Inspect callers/callees only when necessary.
+4. Inspect tests covering the path.
+5. Expand scope only if the initial investigation is insufficient.
 
-## Backend and API Behavior
+Avoid repeatedly rereading unchanged files.
 
-Preserve existing API contracts unless the task explicitly changes them.
+Do not generate repository-wide maps unless requested or genuinely necessary.
 
-When an endpoint combines configured entities with aggregates, verify that entities with no matching aggregate rows are still represented when required by the domain behavior.
+---
 
-Use SQLAlchemy/Alembic conventions already present in the repository.
+## Implementation
 
-Schema changes must include an Alembic migration and preserve existing data where practical. Do not perform destructive migrations unless explicitly requested.
+When implementing:
 
-Authorization and data access must remain owner-scoped.
+* Prefer editing existing functions over creating parallel implementations.
+* Reuse existing helpers and utilities.
+* Match existing error-handling patterns.
+* Keep functions focused.
+* Avoid unnecessary indirection.
+* Avoid premature optimization.
+* Avoid duplicated logic.
+* Validate input at existing trust boundaries.
+* Preserve security controls already present.
 
-## Testing Guidelines
+For backend/API work, pay particular attention to:
 
-Pytest discovers `backend/tests/test_*.py`; mark database-backed tests with `integration` and provide an isolated `TEST_DATABASE_URL`.
+* Authentication
+* Authorization
+* User/data isolation
+* Input validation
+* CSRF where applicable
+* Rate limiting where applicable
+* Error leakage
+* Network exposure
+* Database consistency
 
-Vitest discovers colocated `*.test.ts(x)` files.
+---
 
-Add focused tests for changed:
+## Testing
 
-* financial rules
-* API aggregation behavior
-* authorization boundaries
-* UI model/formatting behavior
-* responsive or interactive state when practical
+Run the narrowest relevant validation first.
 
-No fixed coverage threshold is configured, but avoid reducing meaningful coverage.
+Preferred order:
 
-For bug fixes, include a regression test when the behavior can reasonably be automated.
+1. Existing targeted test(s).
+2. Relevant test file/module.
+3. Lint/typecheck/build for affected code.
+4. Broader test suite only when justified.
 
-## Accessibility
+Do not run expensive unrelated test suites unnecessarily.
 
-For new interactive UI:
+When fixing a bug, add or update a regression test when practical.
 
-* use semantic controls where possible
-* preserve visible focus behavior
-* ensure keyboard accessibility
-* provide appropriate accessible names
-* use `aria-expanded` for disclosure state when applicable
-* connect controlling elements and controlled regions with `aria-controls` when applicable
-* ensure transient menus/popovers can be dismissed predictably
+Do not claim something is verified unless it was actually tested or directly inspected.
 
-Do not add ARIA attributes that duplicate or conflict with native semantics.
+---
 
-## Commit & Pull Request Guidelines
+## Git Discipline
 
-History favors short, imperative subjects such as `Preserve homeserver changes before merge`.
+Before changes:
 
-Keep commits focused and explain non-obvious migration, security, or financial-behavior effects in the body.
+* Inspect `git status`.
+* Do not overwrite unrelated user changes.
 
-Pull requests should summarize behavior, list verification commands, link relevant issues, call out schema or environment changes, and include screenshots for visible UI updates.
+During changes:
 
-Do not commit or push unless explicitly instructed.
+* Keep the patch narrowly scoped.
+* Do not modify generated or unrelated files unless required.
 
-## Security & Configuration
+After changes:
 
-Never commit `.env`, credentials, production connection strings, session secrets, API tokens, or Sentry tokens.
+* Review the diff.
+* Confirm no unrelated modifications were introduced.
 
-Keep PostgreSQL unexposed to the host, preserve secure-cookie and explicit-origin settings in production, and review migration and backup implications for schema changes.
+Do not commit, push, reset, rebase, or discard user changes unless explicitly instructed.
 
-Preserve authentication, authorization, CSRF, session, and per-user data-isolation behavior unless the task explicitly requires changes.
+---
 
-## Task Execution
+## Dependencies
 
-For implementation tasks:
+Do not add a new package or service unless:
 
-1. Read the task requirements completely.
-2. Inspect the relevant existing implementation and tests.
-3. Identify the smallest set of files that needs to change.
-4. Preserve explicitly out-of-scope behavior.
-5. Implement the change using existing project conventions.
-6. Add or update focused tests.
-7. Run targeted verification.
-8. Run the full requested verification suite.
-9. Summarize changed files, behavior, and verification results.
+* Existing dependencies cannot reasonably solve the problem.
+* The benefit clearly outweighs the maintenance cost.
 
-When asked only to inspect, assess, or plan, do not modify files.
+If adding a dependency is necessary, prefer established and actively maintained options.
 
-Requirements marked as deferred are out of scope unless the user explicitly moves them into the current phase.
+Do not upgrade unrelated dependencies during a task.
+
+---
+
+## Performance Work
+
+For optimization tasks:
+
+1. Identify the actual hot path first.
+2. Preserve current functional semantics.
+3. Prefer measurable improvements over theoretical rewrites.
+4. Avoid introducing caches unless invalidation and consistency are understood.
+5. Avoid optimization that significantly increases complexity for negligible benefit.
+
+When benchmarks are available, compare before/after behavior.
+
+---
+
+## Security-Sensitive Changes
+
+Use extra scrutiny for:
+
+* Authentication
+* Sessions
+* Permissions
+* Public endpoints
+* File access
+* Uploads
+* Reverse proxies
+* Network exposure
+* Secrets
+* Database migrations
+* Destructive operations
+
+Do not weaken existing security controls for convenience.
+
+Never print, commit, or expose secrets, tokens, passwords, private keys, or sensitive environment values.
+
+Use placeholders when referencing secrets.
+
+---
+
+## Output / Token Budget
+
+Minimize output tokens aggressively.
+
+Do not narrate routine exploration, shell commands, repository navigation, or obvious reasoning.
+
+Do not:
+
+* Restate the user's request.
+* Dump large source snippets.
+* Quote entire files.
+* Explain every command executed.
+* Produce long implementation diaries.
+* Repeat findings in multiple sections.
+* Generate lengthy summaries after straightforward changes.
+
+Prefer:
+
+* `file:line` or file/symbol references.
+* Short descriptions.
+* Concise findings.
+* Small diffs.
+* Actionable information only.
+
+Exploration may be extensive internally, but the final response should contain only information useful to the user.
+
+Stop once the requested task has been completed.
+
+---
+
+## Default Output Format
+
+For inspection or assessment tasks, use:
+
+### Status
+
+`ready` / `needs-prep` / `blocked`
+
+### Findings
+
+* Only material findings.
+* Prefer `file:line — finding`.
+
+### Recommended Action
+
+* One concise next action.
+
+Target: **≤400 words** unless more detail is required for correctness.
+
+---
+
+For implementation tasks, use:
+
+### Changed
+
+* `file — concise description`
+
+### Verification
+
+* Tests/checks actually performed.
+
+### Notes
+
+* Only unresolved risks, assumptions, or follow-up items.
+
+Do not provide a full walkthrough unless explicitly requested.
+
+---
+
+## Planning
+
+Do not create a lengthy plan for small or obvious tasks.
+
+For larger tasks, produce only a short implementation outline covering:
+
+* Scope
+* Files/components likely affected
+* Material risks
+
+Then proceed if the task is sufficiently defined.
+
+Do not repeatedly ask for confirmation for routine implementation details that can be safely inferred from the repository and task.
+
+---
+
+## Ambiguity
+
+Resolve minor ambiguity from:
+
+1. Existing repository behavior
+2. Existing tests
+3. Existing conventions
+4. The smallest behavior-preserving interpretation
+
+Ask the user only when the ambiguity materially changes expected behavior, security, architecture, or destructive impact.
+
+---
+
+## Completion Criteria
+
+A task is complete when:
+
+* The requested behavior is implemented or assessed.
+* Existing relevant behavior remains intact.
+* Relevant validation has been performed where practical.
+* The diff contains no unrelated changes.
+* Any remaining material limitation is stated concisely.
+
+Do not continue polishing beyond the requested scope.

@@ -104,6 +104,16 @@ server's current calendar date. The current frontend exposes a responsive
 **Add transaction** form: it is a desktop dialog and a mobile full-screen
 sheet, with category choices filtered by inflow/outflow type.
 
+## Multi-currency
+
+PHP is the default account currency, not a currency limit. New account and
+transaction choices use Frankfurter's active catalog, with ISO names and minor
+units supplied locally. A foreign transaction stores its entered amount and a
+historical Frankfurter FX snapshot; dashboards, statements, budgets, and
+allowances use the frozen amount in the account's base currency. No API key is
+required. Set `FRANKFURTER_BASE_URL` only to override the default v2 endpoint.
+The account/base currency is locked once financial data exists.
+
 ## Budget configuration
 
 `/api/v1/budgets/{month_start}` stores and reports the historical overall
@@ -157,4 +167,7 @@ Use [`docs/backup-restore.md`](docs/backup-restore.md) to configure and test
 the nightly, verified PostgreSQL backup. It includes atomic local creation,
 seven-day local and fourteen-day off-site retention, dry-run operation, and a
 non-production restore drill.
+
+For an isolated k3s deployment using the existing images and a new staging-only
+PostgreSQL instance, see [`docs/k3s-staging.md`](docs/k3s-staging.md).
 # Cashbook-mafunami

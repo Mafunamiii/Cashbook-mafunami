@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     sentry_dsn: str | None = None
     sentry_release: str | None = None
     sentry_traces_sample_rate: float = Field(default=0.05, ge=0, le=1)
+    frankfurter_base_url: str = "https://api.frankfurter.dev/v2"
     # `testserver` is FastAPI's in-process test-client host. Production must
     # override this value with its explicit public host names.
     trusted_hosts: str = "localhost,127.0.0.1,testserver"

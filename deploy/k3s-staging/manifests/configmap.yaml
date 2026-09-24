@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: namicash-staging-config
+data:
+  ENVIRONMENT: production
+  COOKIE_SECURE: "true"
+  COOKIE_SAMESITE: lax
+  FRONTEND_ORIGIN: https://staging.example.com
+  TRUSTED_HOSTS: staging.example.com
+  FORWARDED_ALLOW_IPS: "*"
+  REGISTRATION_MODE: invite_only
+  SESSION_TTL_HOURS: "168"
+  LOGIN_RATE_LIMIT_ATTEMPTS: "5"
+  LOGIN_RATE_LIMIT_WINDOW_SECONDS: "300"
+  FRANKFURTER_BASE_URL: https://api.frankfurter.dev/v2
+  SENTRY_DSN: ""
+  SENTRY_RELEASE: k3s-staging
+  SENTRY_TRACES_SAMPLE_RATE: "0.05"

@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { useCurrencies } from "../transactions/currency";
 
 type AppearancePreference = "system" | "dark" | "light";
+type CurrencyCode = string;
 
 type Settings = {
   display_name: string;
   email: string;
+  currency_code: CurrencyCode;
   reporting_mode: "calendar_month" | "payday";
   appearance_preference: AppearancePreference;
+  has_financial_data: boolean;
 };
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
@@ -49,11 +53,13 @@ export function SettingsPage({
   const [settings, setSettings] = useState<Settings | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [appearance, setAppearance] = useState<AppearancePreference>("system");
+  const [currencyCode, setCurrencyCode] = useState<CurrencyCode>("PHP");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { currencies, error: currenciesError } = useCurrencies();
 
   const load = useCallback(async () => {
     try {
@@ -61,6 +67,7 @@ export function SettingsPage({
       setSettings(result);
       setDisplayName(result.display_name);
       setAppearance(result.appearance_preference);
+      setCurrencyCode(result.currency_code);
       onAppearanceChange(result.appearance_preference);
       setError(null);
     } catch (loadError) {
@@ -85,6 +92,7 @@ export function SettingsPage({
         body: JSON.stringify({
           display_name: displayName,
           appearance_preference: appearance,
+          currency_code: currencyCode,
         }),
       });
       setSettings(result);
@@ -144,6 +152,7 @@ export function SettingsPage({
           {error}
         </p>
       )}
+      {currenciesError && <p className="form-error" role="alert">{currenciesError}</p>}
       {notice && (
         <p className="notice" role="status">
           {notice}
@@ -194,6 +203,30 @@ export function SettingsPage({
                 <option value="light">Light</option>
               </select>
             </label>
+            <label>
+              Account / base currency
+              <select
+                value={currencyCode}
+                disabled={settings.has_financial_data}
+                onChange={(event) =>
+                  setCurrencyCode(event.target.value as CurrencyCode)
+                }
+              >
+                {!currencies.some((currency) => currency.code === currencyCode) && (
+                  <option value={currencyCode}>{currencyCode}</option>
+                )}
+                {currencies.map((currency) => (
+                  <option key={currency.code} value={currency.code}>
+                    {currency.code} — {currency.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {settings.has_financial_data && (
+              <p className="hint">
+                Account currency cannot be changed after financial data exists.
+              </p>
+            )}
             <button className="button" type="submit">
               Save account settings
             </button>

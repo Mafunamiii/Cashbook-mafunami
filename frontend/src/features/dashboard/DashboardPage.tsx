@@ -4,6 +4,12 @@ import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { apiRequest } from "../../api";
 import { AddTransaction } from "../transactions/AddTransaction";
 import {
+  currencyByCode,
+  formatCurrency,
+  minorUnitsToDisplay,
+  useCurrencies,
+} from "../transactions/currency";
+import {
   budgetProgress,
   categoryBudgetRemainingCopy,
   categoryBudgetUsageCopy,
@@ -43,10 +49,14 @@ type RecentTransaction = {
   category_name: string;
   category_color: string;
   amount_minor: number;
+  currency_code: string;
+  base_amount_minor: number;
+  base_currency_code: string;
   transaction_date: string;
 };
 
 type Dashboard = Allocation & {
+  base_currency_code: string;
   period_start: string;
   period_end: string;
   period_mode: ReportingMode;
@@ -77,19 +87,6 @@ function localToday() {
   const now = new Date();
   const offset = now.getTimezoneOffset() * 60_000;
   return new Date(now.getTime() - offset).toISOString().slice(0, 10);
-}
-
-function money(value: number | null) {
-  if (value === null) return "Not set";
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "PHP",
-    maximumFractionDigits: 2,
-  }).format(value / 100);
-}
-
-function signedMoney(value: number) {
-  return `${value > 0 ? "+" : value < 0 ? "−" : ""}${money(Math.abs(value))}`;
 }
 
 function previousDay(value: string) {
@@ -136,6 +133,20 @@ export function DashboardPage({
   const saveVersion = useRef(0);
   const customizerRef = useRef<HTMLDetailsElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const { currencies } = useCurrencies();
+  const baseCurrency = currencyByCode(
+    currencies,
+    dashboard?.base_currency_code ?? "PHP",
+  );
+  const money = useCallback(
+    (value: number | null) =>
+      value === null
+        ? "Not set"
+        : formatCurrency(value, baseCurrency.code, baseCurrency.minor_unit),
+    [baseCurrency.code, baseCurrency.minor_unit],
+  );
+  const signedMoney = (value: number) =>
+    `${value > 0 ? "+" : value < 0 ? "−" : ""}${money(Math.abs(value))}`;
 
   const load = useCallback(async () => {
     const params = new URLSearchParams({
@@ -261,13 +272,17 @@ export function DashboardPage({
     () =>
       (dashboard?.category_spending ?? []).map((item) => ({
         ...item,
-        value: item.used_minor,
+        // Recharts requires Number display values; accounting totals remain
+        // integer base-currency minor units everywhere else.
+        value: Number(
+          minorUnitsToDisplay(item.used_minor, baseCurrency.minor_unit),
+        ),
         percentage:
           dashboard && dashboard.total_outflow_minor > 0
             ? (item.used_minor / dashboard.total_outflow_minor) * 100
             : 0,
       })),
-    [dashboard],
+    [baseCurrency.minor_unit, dashboard],
   );
   const activeCategory = chartData.find(
     (item) => item.category_id === selectedCategory,
@@ -567,7 +582,7 @@ export function DashboardPage({
                             />
                           ))}
                         </Pie>
-                        <Tooltip content={<ChartTooltip />} />
+                        <Tooltip content={<ChartTooltip money={money} />} />
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
@@ -639,7 +654,22 @@ export function DashboardPage({
                       </div>
                       <b className={item.transaction_type}>
                         {item.transaction_type === "inflow" ? "+" : "−"}
-                        {money(item.amount_minor)}
+                        {formatCurrency(
+                          item.amount_minor,
+                          item.currency_code,
+                          currencyByCode(currencies, item.currency_code)
+                            .minor_unit,
+                        )}
+                        {item.currency_code !== item.base_currency_code ? (
+                          <small>
+                            ≈ {formatCurrency(
+                              item.base_amount_minor,
+                              item.base_currency_code,
+                              currencyByCode(currencies, item.base_currency_code)
+                                .minor_unit,
+                            )}
+                          </small>
+                        ) : null}
                       </b>
                     </li>
                   ))}
@@ -737,11 +767,13 @@ function SummaryCard({
 function ChartTooltip({
   active,
   payload,
+  money,
 }: {
   active?: boolean;
   payload?: {
     payload: { category_name: string; used_minor: number; percentage: number };
   }[];
+  money: (value: number | null) => string;
 }) {
   if (!active || !payload?.[0]) return null;
   const item = payload[0].payload;

@@ -18,6 +18,7 @@ export function AuthPage({
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [currencyCode, setCurrencyCode] = useState("PHP");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -60,6 +61,7 @@ export function AuthPage({
                   email,
                   display_name: displayName,
                   password,
+                  currency_code: currencyCode,
                   ...(inviteCode ? { invite_code: inviteCode } : {}),
                 },
           ),
@@ -124,6 +126,19 @@ export function AuthPage({
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
             />
+          </label>
+        )}
+        {signingUp && (
+          <label>
+            Account / base currency
+            <select
+              required
+              value={currencyCode}
+              onChange={(event) => setCurrencyCode(event.target.value)}
+            >
+              <option value="PHP">PHP — Philippine peso</option>
+              <option value="AED">AED — UAE dirham</option>
+            </select>
           </label>
         )}
         <label>

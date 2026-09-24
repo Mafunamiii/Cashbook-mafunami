@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.db.models import AppearancePreference, ReportingMode, TransactionType, UserRole
+from app.domain.currency import currency_metadata, normalize_currency_code
 
 
 class RegistrationRequest(BaseModel):
     email: str = Field(max_length=320)
     display_name: str = Field(min_length=1, max_length=120)
     password: str = Field(min_length=8, max_length=256)
+    currency_code: str
     invite_code: str | None = Field(default=None, min_length=1, max_length=256)
 
     @field_validator("email")
@@ -22,6 +25,13 @@ class RegistrationRequest(BaseModel):
         if normalized.count("@") != 1 or normalized.startswith("@") or normalized.endswith("@"):
             raise ValueError("Enter a valid email address.")
         return normalized
+
+    @field_validator("currency_code")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        currency = normalize_currency_code(value)
+        currency_metadata(currency)
+        return currency
 
 
 class LoginRequest(BaseModel):
@@ -72,14 +82,23 @@ class DashboardSummaryPreferences(BaseModel):
 class SettingsResponse(BaseModel):
     display_name: str
     email: str
+    currency_code: str
     reporting_mode: ReportingMode
     appearance_preference: AppearancePreference
     dashboard_summary: DashboardSummaryPreferences
     payday_setup_notice_dismissed: bool
+    has_financial_data: bool = False
+
+
+class CurrencyResponse(BaseModel):
+    code: str
+    name: str
+    minor_unit: int = Field(ge=0, le=3)
 
 
 class SettingsUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    currency_code: str | None = None
     appearance_preference: AppearancePreference | None = None
     dashboard_summary: DashboardSummaryPreferences | None = None
     payday_setup_notice_dismissed: bool | None = None
@@ -90,6 +109,13 @@ class SettingsUpdateRequest(BaseModel):
         if value is not None and not value.strip():
             raise ValueError("Display name cannot be blank.")
         return value
+
+    @field_validator("currency_code")
+    @classmethod
+    def normalize_currency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_currency_code(value)
 
 
 class AdminUserResponse(BaseModel):
@@ -104,6 +130,25 @@ class AdminUserResponse(BaseModel):
     is_active: bool
     must_change_password: bool
     created_at: datetime
+
+
+class LegacyCurrencyMigrationRequest(BaseModel):
+    currency_code: str
+    confirmation: Literal["MIGRATE LEGACY CURRENCY"]
+
+    @field_validator("currency_code")
+    @classmethod
+    def normalize_currency(cls, value: str) -> str:
+        currency = normalize_currency_code(value)
+        currency_metadata(currency)
+        return currency
+
+
+class LegacyCurrencyMigrationResponse(BaseModel):
+    user_id: uuid.UUID
+    previous_currency_code: str
+    currency_code: str
+    legacy_transactions_migrated: int
 
 
 class AccountStatusUpdateRequest(BaseModel):
@@ -152,14 +197,16 @@ class CategoryResponse(BaseModel):
 
 class CategoryCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    color: str = Field(min_length=1, max_length=32)
+    color: str = Field(min_length=7, max_length=7, pattern=r"^#[0-9a-fA-F]{6}$")
     icon: str | None = Field(default=None, max_length=64)
     transaction_type: TransactionType
 
 
 class CategoryUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
-    color: str | None = Field(default=None, min_length=1, max_length=32)
+    color: str | None = Field(
+        default=None, min_length=7, max_length=7, pattern=r"^#[0-9a-fA-F]{6}$"
+    )
     icon: str | None = Field(default=None, max_length=64)
 
 
@@ -173,6 +220,12 @@ class TransactionResponse(BaseModel):
     category_name: str
     category_color: str
     amount_minor: int
+    currency_code: str
+    base_amount_minor: int
+    base_currency_code: str
+    exchange_rate: Decimal
+    exchange_rate_date: date
+    exchange_rate_source: str
     transaction_date: date
     notes: str | None
     created_at: datetime
@@ -180,21 +233,37 @@ class TransactionResponse(BaseModel):
 
 
 class TransactionCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=200)
     transaction_type: TransactionType
     category_id: uuid.UUID
     amount_minor: int = Field(ge=1, le=9_223_372_036_854_775_807)
+    currency_code: str | None = None
     transaction_date: date = Field(default_factory=date.today)
     notes: str | None = Field(default=None, max_length=10_000)
 
+    @field_validator("currency_code")
+    @classmethod
+    def normalize_currency(cls, value: str | None) -> str | None:
+        return normalize_currency_code(value) if value is not None else None
+
 
 class TransactionUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=200)
     transaction_type: TransactionType | None = None
     category_id: uuid.UUID | None = None
     amount_minor: int | None = Field(default=None, ge=1, le=9_223_372_036_854_775_807)
+    currency_code: str | None = None
     transaction_date: date | None = None
     notes: str | None = Field(default=None, max_length=10_000)
+
+    @field_validator("currency_code")
+    @classmethod
+    def normalize_currency(cls, value: str | None) -> str | None:
+        return normalize_currency_code(value) if value is not None else None
 
 
 class TransactionPageResponse(BaseModel):
@@ -246,7 +315,7 @@ class PaydayAllowanceUpdateRequest(BaseModel):
 
 
 class CategoryBudgetUpdateRequest(BaseModel):
-    amount_minor: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    amount_minor: int | None = Field(..., ge=0, le=9_223_372_036_854_775_807)
     reset_each_payday: bool | None = None
 
 
@@ -279,6 +348,7 @@ class CategoryBudgetResponse(BudgetAllocationResponse):
 
 
 class BudgetCycleResponse(BudgetAllocationResponse):
+    base_currency_code: str
     month_start: date
     month_end: date
     total_inflow_minor: int
@@ -308,6 +378,7 @@ class DashboardTransactionResponse(TransactionResponse):
 
 
 class DashboardResponse(BudgetAllocationResponse):
+    base_currency_code: str
     period_start: date
     period_end: date
     period_mode: ReportingMode

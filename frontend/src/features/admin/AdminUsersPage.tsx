@@ -1,5 +1,6 @@
 import * as Sentry from "@sentry/react";
 import { useCallback, useEffect, useState } from "react";
+import { useCurrencies } from "../transactions/currency";
 
 type AdminUser = {
   id: string;
@@ -10,6 +11,9 @@ type AdminUser = {
   must_change_password: boolean;
   created_at: string;
 };
+
+const legacyMigrationWarning =
+  "This does not convert monetary values. It reassigns the currency of legacy financial records.";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 
@@ -83,6 +87,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function AdminUsersPage() {
+  const { currencies } = useCurrencies();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -94,6 +99,7 @@ export function AdminUsersPage() {
   const [isSeedingCycles, setIsSeedingCycles] = useState(false);
   const [isClearingDemo, setIsClearingDemo] = useState(false);
   const [isSendingBackendError, setIsSendingBackendError] = useState(false);
+  const [migrationCurrency, setMigrationCurrency] = useState<Record<string, string>>({});
 
   async function sendBackendError() {
     setIsSendingBackendError(true);
@@ -163,6 +169,24 @@ export function AdminUsersPage() {
           ? actionError.message
           : "Unable to generate password.",
       );
+    }
+  }
+
+  async function migrateLegacyCurrency(user: AdminUser) {
+    const currency = migrationCurrency[user.id] ?? "PHP";
+    if (!window.confirm(`${legacyMigrationWarning}\n\nMigrate ${user.display_name} to ${currency}? This is a one-time operation.`)) return;
+    try {
+      const result = await request<{ legacy_transactions_migrated: number }>(
+        `/admin/users/${user.id}/legacy-currency-migration`,
+        {
+          method: "POST",
+          body: JSON.stringify({ currency_code: currency, confirmation: "MIGRATE LEGACY CURRENCY" }),
+        },
+      );
+      setNotice(`Migrated ${result.legacy_transactions_migrated} legacy transaction(s) for ${user.display_name}.`);
+      await load();
+    } catch (migrationError) {
+      setError(migrationError instanceof Error ? migrationError.message : "Unable to migrate legacy currency.");
     }
   }
 
@@ -378,6 +402,10 @@ export function AdminUsersPage() {
         </div>
       </section>
       <section className="card admin-users" aria-label="User accounts">
+        <p className="admin-warning form-error" role="note">
+          <strong>Legacy currency migration</strong><br />
+          {legacyMigrationWarning} Select a user and confirm only when their data predates multi-currency adoption.
+        </p>
         {!users.length && !error ? (
           <p className="empty-state">Loading users…</p>
         ) : (
@@ -440,6 +468,27 @@ export function AdminUsersPage() {
                   }
                 >
                   Revoke sessions
+                </button>
+                <label>
+                  Legacy base currency
+                  <select
+                    value={migrationCurrency[user.id] ?? "PHP"}
+                    onChange={(event) => setMigrationCurrency((current) => ({ ...current, [user.id]: event.target.value }))}
+                  >
+                    {!currencies.some((currency) => currency.code === (migrationCurrency[user.id] ?? "PHP")) && (
+                      <option value={migrationCurrency[user.id] ?? "PHP"}>
+                        {migrationCurrency[user.id] ?? "PHP"}
+                      </option>
+                    )}
+                    {currencies.map((currency) => (
+                      <option key={currency.code} value={currency.code}>
+                        {currency.code} — {currency.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button className="text-button danger-button" type="button" onClick={() => void migrateLegacyCurrency(user)}>
+                  Migrate legacy currency
                 </button>
               </div>
             </article>

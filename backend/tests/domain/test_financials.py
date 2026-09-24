@@ -29,6 +29,17 @@ def test_financial_summary_excludes_inflow_from_spending_budget() -> None:
     assert summary.budget_usage_percent == Decimal("66.66666666666666666666666667")
 
 
+@pytest.mark.parametrize("base_amount_minor", [1_650, 1_650_000])
+def test_base_currency_minor_units_are_aggregated_without_exponent_assumptions(
+    base_amount_minor: int,
+) -> None:
+    summary = calculate_financial_summary(
+        [FinancialEntry(CashFlowType.OUTFLOW, base_amount_minor)], budget_minor=base_amount_minor * 2
+    )
+    assert summary.total_outflow_minor == base_amount_minor
+    assert summary.budget_remaining_minor == base_amount_minor
+
+
 def test_missing_budget_has_no_remaining_or_usage_percentage() -> None:
     summary = calculate_financial_summary(
         [FinancialEntry(CashFlowType.OUTFLOW, 1)], budget_minor=None

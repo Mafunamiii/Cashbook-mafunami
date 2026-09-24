@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
@@ -14,25 +15,7 @@ from app.db.models import AuditEvent, Category, CategoryBudget, Transaction
 
 router = APIRouter(prefix="/api/v1/categories", tags=["categories"])
 
-# These restrained, accessible swatches are the only colors accepted for a
-# category. Keeping this server-side prevents arbitrary CSS values from being
-# stored or rendered later in reports.
-CURATED_CATEGORY_COLORS = frozenset(
-    {
-        "#22c55e",
-        "#14b8a6",
-        "#8b5cf6",
-        "#38bdf8",
-        "#f97316",
-        "#ef4444",
-        "#eab308",
-        "#6366f1",
-        "#ec4899",
-        "#a855f7",
-        "#06b6d4",
-        "#94a3b8",
-    }
-)
+HEX_COLOR_PATTERN = re.compile(r"^#[0-9a-f]{6}$", re.IGNORECASE)
 
 
 def _owned_category_or_404(
@@ -55,10 +38,10 @@ def _normalized_category_fields(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Name is required."
         )
-    if normalized_color not in CURATED_CATEGORY_COLORS:
+    if not HEX_COLOR_PATTERN.fullmatch(normalized_color):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Choose a curated category color.",
+            detail="Category color must be a six-digit hex value.",
         )
     return normalized_name, normalized_color, normalized_icon or None
 
@@ -202,8 +185,8 @@ def delete_category(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "This category is used by transactions or budgets. "
-                "Archive it to preserve those records."
+                "This category cannot be permanently deleted because it is used by "
+                "transactions or budgets. Archive it instead to preserve those records."
             ),
         )
     _audit_category_event(db, event_type="category.deleted", category=category, request=request)

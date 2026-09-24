@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import {
+  currencyByCode,
+  formatCurrency,
+  useCurrencies,
+} from "../transactions/currency";
+import { majorAmount, toMinorUnits } from "../transactions/transactionModel";
 
 type ReportingMode = "calendar_month" | "payday";
 
@@ -20,6 +26,7 @@ type Allocation = {
 };
 
 type Cycle = Allocation & {
+  base_currency_code: string;
   month_start: string;
   month_end: string;
   total_inflow_minor: number;
@@ -40,6 +47,8 @@ type Cycle = Allocation & {
     reset_each_payday: boolean;
   })[];
 };
+
+type CategoryDraft = { amount: string; reset: boolean };
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 
@@ -75,23 +84,8 @@ function thisMonth(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-function money(value: number | null): string {
-  return value === null
-    ? "Not set"
-    : new Intl.NumberFormat(undefined, {
-        style: "currency",
-        currency: "PHP",
-      }).format(value / 100);
-}
-
-function majorAmount(value: number | null): string {
-  return value === null ? "" : (value / 100).toFixed(2);
-}
-
-function toMinorUnits(value: string): number | null {
-  if (!/^\d+(\.\d{1,2})?$/.test(value.trim())) return null;
-  const result = Math.round(Number(value) * 100);
-  return Number.isSafeInteger(result) ? result : null;
+function budgetMinorUnits(value: string, minorUnit: number): number | null {
+  return /^0(?:\.0*)?$/.test(value.trim()) ? 0 : toMinorUnits(value, minorUnit);
 }
 
 export function BudgetSettingsPage() {
@@ -105,6 +99,18 @@ export function BudgetSettingsPage() {
   const [secondDay, setSecondDay] = useState("27");
   const [effectiveFrom, setEffectiveFrom] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [categoryDrafts, setCategoryDrafts] = useState<Record<string, CategoryDraft>>({});
+  const [categoryBaseline, setCategoryBaseline] = useState<Record<string, CategoryDraft>>({});
+  const [savingCategories, setSavingCategories] = useState(false);
+  const { currencies } = useCurrencies();
+  const baseCurrency = currencyByCode(
+    currencies,
+    cycle?.base_currency_code ?? "PHP",
+  );
+  const money = (value: number | null) =>
+    value === null
+      ? "Not set"
+      : formatCurrency(value, baseCurrency.code, baseCurrency.minor_unit);
 
   const load = useCallback(async () => {
     try {
@@ -119,7 +125,29 @@ export function BudgetSettingsPage() {
       setPaydaySchedule(settings.payday_schedule);
       if (settings.reporting_mode === "payday") setShowPaydaySettings(true);
       setCycle(currentCycle);
-      setAmount(majorAmount(currentCycle.amount_minor));
+      const loadedDrafts = Object.fromEntries(
+          currentCycle.category_budgets.map((category) => [
+            category.category_id,
+            {
+              amount:
+                category.amount_minor === null
+                  ? ""
+                  : majorAmount(category.amount_minor, currencyByCode(currencies, currentCycle.base_currency_code).minor_unit),
+              reset: category.reset_each_payday,
+            },
+          ]),
+        );
+      setCategoryDrafts(loadedDrafts);
+      setCategoryBaseline(loadedDrafts);
+      setAmount(
+        currentCycle.amount_minor === null
+          ? ""
+          : majorAmount(
+              currentCycle.amount_minor,
+              currencyByCode(currencies, currentCycle.base_currency_code)
+                .minor_unit,
+            ),
+      );
       setNotice(null);
     } catch (error) {
       setNotice(
@@ -128,7 +156,7 @@ export function BudgetSettingsPage() {
           : "Unable to load budget settings.",
       );
     }
-  }, [monthStart]);
+  }, [currencies, monthStart]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
@@ -137,10 +165,10 @@ export function BudgetSettingsPage() {
 
   async function saveBudget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const amountMinor = toMinorUnits(amount);
+    const amountMinor = budgetMinorUnits(amount, baseCurrency.minor_unit);
     if (amountMinor === null) {
       setNotice(
-        "Enter a non-negative peso amount with up to two decimal places.",
+        `Enter a non-negative ${baseCurrency.code} amount with up to ${baseCurrency.minor_unit} decimal places.`,
       );
       return;
     }
@@ -203,10 +231,10 @@ export function BudgetSettingsPage() {
   }
 
   async function saveAllowance(periodStart: string, amountMinor: string) {
-    const parsedAmount = toMinorUnits(amountMinor);
+    const parsedAmount = budgetMinorUnits(amountMinor, baseCurrency.minor_unit);
     if (parsedAmount === null)
       return setNotice(
-        "Enter a valid peso amount with up to two decimal places.",
+        `Enter a valid ${baseCurrency.code} amount with up to ${baseCurrency.minor_unit} decimal places.`,
       );
     try {
       await request(`/budgets/${monthStart}/allowances/${periodStart}`, {
@@ -222,32 +250,52 @@ export function BudgetSettingsPage() {
     }
   }
 
-  async function saveCategoryBudget(
-    categoryId: string,
-    amountMinor: string,
-    resetEachPayday: boolean,
-  ) {
-    const parsedAmount = toMinorUnits(amountMinor);
-    if (parsedAmount === null)
-      return setNotice(
-        "Enter a valid peso amount with up to two decimal places.",
-      );
+  async function saveCategoryBudget(categoryId: string, draft: CategoryDraft) {
+    const parsedAmount = draft.amount.trim() === "" ? null : budgetMinorUnits(draft.amount, baseCurrency.minor_unit);
+    if (parsedAmount === null && draft.amount.trim() !== "")
+      throw new Error(`Enter a valid ${baseCurrency.code} amount with up to ${baseCurrency.minor_unit} decimal places.`);
+    await request(`/budgets/${monthStart}/categories/${categoryId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        amount_minor: parsedAmount,
+        reset_each_payday: draft.reset,
+      }),
+    });
+  }
+
+  async function saveAllCategoryBudgets() {
+    if (!cycle || savingCategories) return;
+    const changed = cycle.category_budgets.filter((item) => {
+      const draft = categoryDrafts[item.category_id];
+      const baseline = categoryBaseline[item.category_id];
+      return draft && baseline && (draft.amount !== baseline.amount || draft.reset !== baseline.reset);
+    });
+    for (const item of changed) {
+      const draft = categoryDrafts[item.category_id];
+      if (draft.amount.trim() !== "" && budgetMinorUnits(draft.amount, baseCurrency.minor_unit) === null) {
+        setNotice(`Enter a valid ${baseCurrency.code} amount for ${item.category_name}.`);
+        return;
+      }
+    }
+    setSavingCategories(true);
+    let savedCount = 0;
     try {
-      await request(`/budgets/${monthStart}/categories/${categoryId}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          amount_minor: parsedAmount,
-          reset_each_payday: resetEachPayday,
-        }),
-      });
-      setNotice("Category allocation saved.");
-      await load();
+      for (const item of changed) {
+        const draft = categoryDrafts[item.category_id];
+        await saveCategoryBudget(item.category_id, draft);
+        setCategoryBaseline((baseline) => ({ ...baseline, [item.category_id]: draft }));
+        savedCount += 1;
+      }
+      setNotice(changed.length ? "Category allocations saved." : "No category allocation changes to save.");
+      if (changed.length) await load();
     } catch (error) {
       setNotice(
-        error instanceof Error
-          ? error.message
-          : "Unable to save category allocation.",
+        savedCount
+          ? `${savedCount} category allocation${savedCount === 1 ? "" : "s"} saved; the remaining changes were not saved. ${error instanceof Error ? error.message : "Unable to save category allocations."}`
+          : error instanceof Error ? error.message : "Unable to save category allocations.",
       );
+    } finally {
+      setSavingCategories(false);
     }
   }
 
@@ -282,10 +330,12 @@ export function BudgetSettingsPage() {
             />
           </label>
           <label>
-            Overall budget <span className="hint">PHP</span>
+            Overall budget <span className="hint">{baseCurrency.code}</span>
             <input
               inputMode="decimal"
-              pattern="[0-9]+([.][0-9]{1,2})?"
+              pattern={
+                baseCurrency.minor_unit ? "[0-9]+([.][0-9]+)?" : "[0-9]+"
+              }
               value={amount}
               onChange={(event) => setAmount(event.target.value)}
               placeholder="e.g. 3000.00"
@@ -309,24 +359,24 @@ export function BudgetSettingsPage() {
             <p className="eyebrow">Sub-budgets</p>
             <h2>Category allocations</h2>
           </div>
+          <div className="budget-actions">
+            <button className="text-button" type="button" onClick={() => setCategoryDrafts((drafts) => Object.fromEntries(Object.keys(drafts).map((id) => [id, { ...drafts[id], amount: "" }])))}>
+              Clear all
+            </button>
+            <button className="button" disabled={savingCategories} type="button" onClick={() => void saveAllCategoryBudgets()}>
+              Save all
+            </button>
+          </div>
           <p className="hint">
             These are outflow-only subdivisions of the monthly envelope.
             Overspending is shown but never blocked. Optional payday resets
             preserve the prior cycle and start the next allocation at zero.
           </p>
-          {cycle?.category_budgets.map((category) => (
-            <form
+          {cycle?.category_budgets.map((category) => {
+            const draft = categoryDrafts[category.category_id] ?? { amount: "", reset: false };
+            return <div
               className="allocation-row"
               key={`${category.category_id}-${category.amount_minor}-${category.reset_each_payday}`}
-              onSubmit={(event) => {
-                event.preventDefault();
-                const formData = new FormData(event.currentTarget);
-                void saveCategoryBudget(
-                  category.category_id,
-                  formData.get("amount") as string,
-                  formData.get("reset") === "on",
-                );
-              }}
             >
               <span>
                 <i
@@ -341,26 +391,27 @@ export function BudgetSettingsPage() {
               </span>
               <input
                 aria-label={`${category.category_name} budget`}
-                defaultValue={majorAmount(category.amount_minor)}
+                value={draft.amount}
+                onChange={(event) => setCategoryDrafts((items) => ({ ...items, [category.category_id]: { ...draft, amount: event.target.value } }))}
                 inputMode="decimal"
                 name="amount"
-                pattern="[0-9]+([.][0-9]{1,2})?"
+                pattern={
+                  baseCurrency.minor_unit ? "[0-9]+([.][0-9]+)?" : "[0-9]+"
+                }
                 required
               />
               <label className="allocation-reset-toggle">
                 <input
-                  defaultChecked={category.reset_each_payday}
+                  checked={draft.reset}
+                  onChange={(event) => setCategoryDrafts((items) => ({ ...items, [category.category_id]: { ...draft, reset: event.target.checked } }))}
                   disabled={!paydaySchedule}
                   name="reset"
                   type="checkbox"
                 />
                 Reset each payday
               </label>
-              <button className="text-button" type="submit">
-                Save
-              </button>
-            </form>
-          ))}
+            </div>;
+          })}
         </section>
 
         <section className="card budget-panel budget-panel-wide payday-settings">
@@ -500,10 +551,21 @@ export function BudgetSettingsPage() {
                       </span>
                       <input
                         aria-label={`Allowance for ${allowance.period_start}`}
-                        defaultValue={majorAmount(allowance.amount_minor)}
+                        defaultValue={
+                          allowance.amount_minor === null
+                            ? ""
+                            : majorAmount(
+                                allowance.amount_minor,
+                                baseCurrency.minor_unit,
+                              )
+                        }
                         inputMode="decimal"
                         name="amount"
-                        pattern="[0-9]+([.][0-9]{1,2})?"
+                        pattern={
+                          baseCurrency.minor_unit
+                            ? "[0-9]+([.][0-9]+)?"
+                            : "[0-9]+"
+                        }
                         required
                       />
                       <button className="text-button" type="submit">

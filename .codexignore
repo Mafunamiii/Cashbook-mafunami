@@ -1,0 +1,21 @@
+# Generated Python artifacts
+backend/build/
+backend/cashbook_backend.egg-info/
+backend/**/__pycache__/
+backend/**/*.pyc
+
+# Frontend dependencies/build output
+frontend/node_modules/
+frontend/dist/
+
+# Tool/cache artifacts
+backend/.coverage
+backend/.pytest_cache/
+frontend/coverage/
+
+# Git / environment / secrets
+.git/
+.env
+.env.*
+!.env.example
+!.env.production.example

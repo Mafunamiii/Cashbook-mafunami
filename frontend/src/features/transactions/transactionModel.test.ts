@@ -24,6 +24,15 @@ describe("transaction amounts", () => {
     expect(toMinorUnits("not money")).toBeNull();
   });
 
+  it("uses the selected currency exponent without floating point rounding", () => {
+    expect(toMinorUnits("1234", 0)).toBe(1234);
+    expect(toMinorUnits("12.5", 0)).toBeNull();
+    expect(toMinorUnits("12.34", 2)).toBe(1234);
+    expect(toMinorUnits("12.345", 2)).toBeNull();
+    expect(toMinorUnits("12.345", 3)).toBe(12345);
+    expect(toMinorUnits("12.3456", 3)).toBeNull();
+  });
+
   it("converts stored centavos back to an editable peso value", () => {
     expect(majorAmount(20_000)).toBe("200.00");
   });

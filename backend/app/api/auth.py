@@ -167,7 +167,7 @@ def register(
     )
     db.add(user)
     db.flush()
-    db.add(UserPreferences(user_id=user.id))
+    db.add(UserPreferences(user_id=user.id, currency_code=payload.currency_code))
     db.add_all(
         [
             Category(user_id=user.id, name=name, color=color, transaction_type=transaction_type)

@@ -6,6 +6,7 @@ from app.api.admin import router as admin_router
 from app.api.auth import router as auth_router
 from app.api.budgets import router as budgets_router
 from app.api.categories import router as categories_router
+from app.api.currencies import router as currencies_router
 from app.api.settings import router as settings_router
 from app.api.transactions import router as transactions_router
 from app.core.config import get_settings
@@ -29,6 +30,7 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(settings_router)
 app.include_router(categories_router)
+app.include_router(currencies_router)
 app.include_router(transactions_router)
 app.include_router(budgets_router)
 

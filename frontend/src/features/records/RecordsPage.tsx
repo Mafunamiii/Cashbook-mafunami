@@ -4,6 +4,9 @@ import type { FormEvent } from "react";
 import type { Category, CategoryType } from "../categories/categoryModel";
 import type { Transaction } from "../transactions/transactionModel";
 import { majorAmount, toMinorUnits } from "../transactions/transactionModel";
+import { currencyByCode, formatCurrency, useCurrencies } from "../transactions/currency";
+import type { Currency } from "../transactions/currency";
+import type { CurrencyCode } from "../transactions/currency";
 
 type Grouping = "calendar_month" | "payday";
 type Sort = "newest" | "oldest";
@@ -34,6 +37,11 @@ type Editor = {
   transaction_type: CategoryType;
   category_id: string;
   amount_minor: string;
+  currency_code: CurrencyCode;
+  base_amount_minor: number;
+  base_currency_code: CurrencyCode;
+  exchange_rate: string;
+  exchange_rate_date: string;
   transaction_date: string;
   notes: string;
 };
@@ -52,16 +60,11 @@ function csrfToken(): string | undefined {
     ?.split("=")[1];
 }
 
-function money(value: number) {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "PHP",
-    maximumFractionDigits: 2,
-  }).format(Math.abs(value) / 100);
-}
-
-function signedAmount(item: StatementTransaction) {
-  return `${item.transaction_type === "inflow" ? "+" : "−"}${money(item.amount_minor)}`;
+function signedAmount(item: StatementTransaction, minorUnit = 2) {
+  return `${item.transaction_type === "inflow" ? "+" : "−"}${formatCurrency(
+    item.amount_minor,
+    item.currency_code, minorUnit,
+  )}`;
 }
 
 function readableDate(value: string) {
@@ -82,19 +85,25 @@ function periodLabel(item: StatementTransaction, grouping: Grouping) {
   return `${readableDate(item.period_start)} – ${readableDate(item.period_end)}`;
 }
 
-function toEditor(item: StatementTransaction): Editor {
+function toEditor(item: StatementTransaction, minorUnit = 2): Editor {
   return {
     id: item.id,
     name: item.name,
     transaction_type: item.transaction_type,
     category_id: item.category_id,
-    amount_minor: majorAmount(item.amount_minor),
+    amount_minor: majorAmount(item.amount_minor, minorUnit),
+    currency_code: item.currency_code,
+    base_amount_minor: item.base_amount_minor,
+    base_currency_code: item.base_currency_code,
+    exchange_rate: item.exchange_rate,
+    exchange_rate_date: item.exchange_rate_date,
     transaction_date: item.transaction_date,
     notes: item.notes ?? "",
   };
 }
 
 export function RecordsPage() {
+  const { currencies, error: currenciesError } = useCurrencies();
   const [pageData, setPageData] = useState<Page | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [page, setPage] = useState(1);
@@ -116,6 +125,13 @@ export function RecordsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [pendingBulkDeletion, setPendingBulkDeletion] =
     useState<PendingBulkDeletion | null>(null);
+  const editorCurrency = currencyByCode(
+    currencies,
+    editor?.currency_code ?? "PHP",
+  );
+  const editorAmountStep = editorCurrency.minor_unit
+    ? `0.${"0".repeat(editorCurrency.minor_unit - 1)}1`
+    : "1";
 
   const load = useCallback(async () => {
     const params = new URLSearchParams({
@@ -224,9 +240,14 @@ export function RecordsPage() {
   async function saveEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editor) return;
-    const amountMinor = toMinorUnits(editor.amount_minor);
+    const amountMinor = toMinorUnits(
+      editor.amount_minor,
+      editorCurrency.minor_unit,
+    );
     if (amountMinor === null) {
-      setError("Enter a valid amount with up to two decimal places.");
+      setError(
+        `Enter a valid amount with up to ${editorCurrency.minor_unit} decimal places.`,
+      );
       return;
     }
     setIsSaving(true);
@@ -242,14 +263,22 @@ export function RecordsPage() {
             ...(csrf ? { "X-CSRF-Token": decodeURIComponent(csrf) } : {}),
           },
           body: JSON.stringify({
-            ...editor,
             name: editor.name.trim(),
+            transaction_type: editor.transaction_type,
+            category_id: editor.category_id,
             amount_minor: amountMinor,
+            currency_code: editor.currency_code,
+            transaction_date: editor.transaction_date,
             notes: editor.notes.trim() || null,
           }),
         },
       );
-      if (!response.ok) throw new Error("Unable to update transaction.");
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as {
+          detail?: string;
+        } | null;
+        throw new Error(body?.detail ?? "Unable to update transaction.");
+      }
       setEditor(null);
       await load();
     } catch (requestError) {
@@ -533,6 +562,11 @@ export function RecordsPage() {
           {error}
         </p>
       )}
+      {currenciesError && (
+        <p className="form-error" role="alert">
+          {currenciesError}
+        </p>
+      )}
       {notice && (
         <p className="notice" role="status">
           {notice}
@@ -621,12 +655,21 @@ export function RecordsPage() {
                   <tbody>
                     {group.items.map((item) => (
                       <RecordRow
+                        currencies={currencies}
                         item={item}
                         key={item.id}
                         isSelected={selectedIds.has(item.id)}
                         isSelecting={isSelecting}
                         onDelete={deleteTransaction}
-                        onEdit={() => setEditor(toEditor(item))}
+                        onEdit={() =>
+                          setEditor(
+                            toEditor(
+                              item,
+                              currencyByCode(currencies, item.currency_code)
+                                .minor_unit,
+                            ),
+                          )
+                        }
                         onSelect={() => toggleSelected(item.id)}
                       />
                     ))}
@@ -636,12 +679,21 @@ export function RecordsPage() {
               <div className="records-mobile-list">
                 {group.items.map((item) => (
                   <RecordCard
+                    currencies={currencies}
                     item={item}
                     key={item.id}
                     isSelected={selectedIds.has(item.id)}
                     isSelecting={isSelecting}
                     onDelete={deleteTransaction}
-                    onEdit={() => setEditor(toEditor(item))}
+                    onEdit={() =>
+                      setEditor(
+                        toEditor(
+                          item,
+                          currencyByCode(currencies, item.currency_code)
+                            .minor_unit,
+                        ),
+                      )
+                    }
                     onSelect={() => toggleSelected(item.id)}
                   />
                 ))}
@@ -752,19 +804,56 @@ export function RecordsPage() {
                 </select>
               </label>
               <label>
-                Amount <span className="hint">PHP</span>
+                Currency
+                <select
+                  onChange={(event) =>
+                    setEditor({
+                      ...editor,
+                      currency_code: event.target.value as CurrencyCode,
+                    })
+                  }
+                  value={editor.currency_code}
+                >
+                  {!currencies.some((currency) => currency.code === editor.currency_code) && (
+                    <option value={editor.currency_code}>{editor.currency_code}</option>
+                  )}
+                  {currencies.map((currency) => (
+                    <option key={currency.code} value={currency.code}>
+                      {currency.code} — {currency.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Amount <span className="hint">{editor.currency_code}</span>
                 <input
                   inputMode="decimal"
-                  min="0.01"
+                  min={editorAmountStep}
                   onChange={(event) =>
                     setEditor({ ...editor, amount_minor: event.target.value })
                   }
                   required
-                  step="0.01"
+                  step={editorAmountStep}
                   type="number"
                   value={editor.amount_minor}
                 />
               </label>
+              {editor.currency_code !== editor.base_currency_code ? (
+                <p className="hint">
+                  Captured conversion: ≈{" "}
+                  {formatCurrency(
+                    editor.base_amount_minor,
+                    editor.base_currency_code,
+                    currencyByCode(currencies, editor.base_currency_code)
+                      .minor_unit,
+                  )}
+                  <br />
+                  Rate: 1 {editor.currency_code} = {editor.exchange_rate}{" "}
+                  {editor.base_currency_code}
+                  <br />
+                  Rate date: {readableDate(editor.exchange_rate_date)}
+                </p>
+              ) : null}
               <label>
                 Date
                 <input
@@ -815,6 +904,7 @@ export function RecordsPage() {
 
 function RecordRow({
   item,
+  currencies,
   isSelecting,
   isSelected,
   onEdit,
@@ -822,6 +912,7 @@ function RecordRow({
   onSelect,
 }: {
   item: StatementTransaction;
+  currencies: Currency[];
   isSelecting: boolean;
   isSelected: boolean;
   onEdit: () => void;
@@ -858,11 +949,14 @@ function RecordRow({
         </span>
       </td>
       <td className={`amount-column ${item.transaction_type}`}>
-        {signedAmount(item)}
+        {signedAmount(item, currencyByCode(currencies, item.currency_code).minor_unit)}
+        {item.currency_code !== item.base_currency_code ? (
+          <small>≈ {formatCurrency(item.base_amount_minor, item.base_currency_code, currencyByCode(currencies, item.base_currency_code).minor_unit)}</small>
+        ) : null}
       </td>
       <td className="amount-column">
         {item.running_balance_minor < 0 ? "−" : ""}
-        {money(item.running_balance_minor)}
+        {formatCurrency(Math.abs(item.running_balance_minor), item.base_currency_code, currencyByCode(currencies, item.base_currency_code).minor_unit)}
       </td>
       <td className="record-actions">
         <button className="text-button" onClick={onEdit} type="button">
@@ -882,6 +976,7 @@ function RecordRow({
 
 function RecordCard({
   item,
+  currencies,
   isSelecting,
   isSelected,
   onEdit,
@@ -889,6 +984,7 @@ function RecordCard({
   onSelect,
 }: {
   item: StatementTransaction;
+  currencies: Currency[];
   isSelecting: boolean;
   isSelected: boolean;
   onEdit: () => void;
@@ -917,14 +1013,19 @@ function RecordCard({
             {readableDate(item.transaction_date)} · {item.category_name}
           </small>
         </div>
-        <b className={item.transaction_type}>{signedAmount(item)}</b>
+        <b className={item.transaction_type}>
+          {signedAmount(item, currencyByCode(currencies, item.currency_code).minor_unit)}
+          {item.currency_code !== item.base_currency_code ? (
+            <small>≈ {formatCurrency(item.base_amount_minor, item.base_currency_code, currencyByCode(currencies, item.base_currency_code).minor_unit)}</small>
+          ) : null}
+        </b>
       </div>
       <div className="record-card-bottom">
         <span>
           Balance{" "}
           <strong>
             {item.running_balance_minor < 0 ? "−" : ""}
-            {money(item.running_balance_minor)}
+            {formatCurrency(Math.abs(item.running_balance_minor), item.base_currency_code, currencyByCode(currencies, item.base_currency_code).minor_unit)}
           </strong>
         </span>
         {!isSelecting && (

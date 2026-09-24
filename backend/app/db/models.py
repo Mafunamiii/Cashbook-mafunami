@@ -9,6 +9,7 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -21,6 +22,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -155,6 +157,7 @@ class Transaction(Timestamped, Base):
     __tablename__ = "transactions"
     __table_args__ = (
         CheckConstraint("amount_minor > 0", name="ck_transactions_positive_amount"),
+        CheckConstraint("exchange_rate > 0", name="ck_transactions_positive_exchange_rate"),
         ForeignKeyConstraint(
             ["user_id", "category_id", "transaction_type"],
             ["categories.user_id", "categories.id", "categories.transaction_type"],
@@ -180,6 +183,25 @@ class Transaction(Timestamped, Base):
         nullable=False,
     )
     amount_minor: Mapped[int] = mapped_column(BIGINT, nullable=False)
+    currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default="PHP")
+    base_amount_minor: Mapped[int] = mapped_column(
+        BIGINT,
+        nullable=False,
+        default=lambda context: context.get_current_parameters()["amount_minor"],
+    )
+    base_currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default="PHP")
+    exchange_rate: Mapped[Decimal] = mapped_column(
+        Numeric(20, 10), nullable=False, default=Decimal("1")
+    )
+    exchange_rate_date: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+        default=lambda context: context.get_current_parameters()["transaction_date"],
+    )
+    exchange_rate_source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="identity"
+    )
+    legacy_currency_record: Mapped[bool] = mapped_column(nullable=False, default=False)
     transaction_date: Mapped[date] = mapped_column(Date, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -187,6 +209,30 @@ class Transaction(Timestamped, Base):
     category: Mapped[Category] = relationship(
         back_populates="transactions", foreign_keys=[category_id]
     )
+
+
+class ExchangeRateCache(Timestamped, Base):
+    """Shared, immutable snapshots of provider FX observations."""
+
+    __tablename__ = "exchange_rate_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "source",
+            "source_currency_code",
+            "target_currency_code",
+            "requested_date",
+            name="uq_exchange_rate_cache_source_pair_requested_date",
+        ),
+        CheckConstraint("rate > 0", name="ck_exchange_rate_cache_positive_rate"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_currency_code: Mapped[str] = mapped_column(String(3), nullable=False)
+    target_currency_code: Mapped[str] = mapped_column(String(3), nullable=False)
+    requested_date: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_date: Mapped[date] = mapped_column(Date, nullable=False)
+    rate: Mapped[Decimal] = mapped_column(Numeric(20, 10), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
 
 
 class BudgetConfiguration(Timestamped, Base):

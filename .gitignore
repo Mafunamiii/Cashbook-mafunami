@@ -3,6 +3,10 @@
 !.env.example
 !.env.production.example
 
+# k3s staging secret material
+deploy/k3s-staging/*.env
+!deploy/k3s-staging/staging.env.example
+
 # Editor and operating-system files
 .DS_Store
 Thumbs.db

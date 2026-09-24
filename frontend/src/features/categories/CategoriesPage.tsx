@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-import { categoryTypeLabel, CURATED_COLORS } from "./categoryModel";
+import { categoryTypeLabel, normalizeCategoryColor } from "./categoryModel";
 import type { Category, CategoryType } from "./categoryModel";
+import { CategoryIcon, IconPicker } from "./IconPicker";
+import { findCategoryIcon } from "./iconRegistry";
 import { AddTransaction } from "../transactions/AddTransaction";
 
 type CategoryForm = {
@@ -14,12 +16,21 @@ type CategoryForm = {
 
 const emptyForm: CategoryForm = {
   name: "",
-  color: CURATED_COLORS[0],
+  color: "#22c55e",
   icon: "",
   transaction_type: "outflow",
 };
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
+
+class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
 
 function csrfToken(): string | undefined {
   return document.cookie
@@ -43,7 +54,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = (await response.json().catch(() => null)) as {
       detail?: string;
     } | null;
-    throw new Error(body?.detail ?? "Unable to update categories.");
+    throw new ApiError(
+      body?.detail ?? "Unable to update categories.",
+      response.status,
+    );
   }
   return (response.status === 204 ? undefined : response.json()) as T;
 }
@@ -99,8 +113,13 @@ export function CategoriesPage() {
 
   async function saveCategory(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const color = normalizeCategoryColor(form.color);
+    if (!color) {
+      setNotice("Enter a valid six-digit hex color, such as #22c55e.");
+      return;
+    }
     try {
-      const body = { ...form, icon: form.icon.trim() || null };
+      const body = { ...form, color, icon: form.icon.trim() || null };
       if (editing) {
         await request<Category>(`/${editing.id}`, {
           method: "PATCH",
@@ -158,7 +177,11 @@ export function CategoriesPage() {
       await loadCategories();
     } catch (error) {
       setNotice(
-        error instanceof Error ? error.message : "Unable to delete category.",
+        error instanceof ApiError && error.status === 409
+          ? error.message
+          : error instanceof Error
+            ? error.message
+            : "Unable to delete category.",
       );
     }
   }
@@ -225,32 +248,37 @@ export function CategoriesPage() {
               <option value="inflow">Inflow</option>
             </select>
           </label>
-          <label>
-            Icon <span className="hint">optional</span>
-            <input
-              autoComplete="off"
-              maxLength={64}
-              onChange={(event) => updateForm("icon", event.target.value)}
-              placeholder="e.g. paw-print"
+          <div className="category-form-field">
+            <span>Icon <span className="hint">optional</span></span>
+            <IconPicker
+              color={form.color}
+              onChange={(icon) => updateForm("icon", icon)}
               value={form.icon}
             />
-          </label>
+          </div>
           <fieldset>
             <legend>Color</legend>
-            <div className="color-grid">
-              {CURATED_COLORS.map((color) => (
-                <label className="color-choice" key={color}>
-                  <input
-                    checked={form.color === color}
-                    name="category-color"
-                    onChange={() => updateForm("color", color)}
-                    type="radio"
-                    value={color}
-                  />
-                  <span aria-label={color} style={{ backgroundColor: color }} />
-                </label>
-              ))}
-            </div>
+            <input
+              aria-label="Choose category color"
+              onChange={(event) => updateForm("color", event.target.value)}
+              type="color"
+              value={normalizeCategoryColor(form.color) ?? "#000000"}
+            />
+            <label>
+              Hex color
+              <input
+                aria-invalid={normalizeCategoryColor(form.color) ? undefined : true}
+                maxLength={7}
+                onBlur={() => {
+                  const normalized = normalizeCategoryColor(form.color);
+                  if (normalized) updateForm("color", normalized);
+                }}
+                onChange={(event) => updateForm("color", event.target.value)}
+                placeholder="#22c55e"
+                spellCheck={false}
+                value={form.color}
+              />
+            </label>
           </fieldset>
           <div className="form-actions">
             {editing && (
@@ -306,8 +334,15 @@ export function CategoriesPage() {
                           style={{ backgroundColor: category.color }}
                         />
                         <div className="category-name">
-                          <strong>{category.name}</strong>
-                          <span>{category.icon || "No icon"}</span>
+                          <strong className="category-name-heading">
+                            {category.icon && <CategoryIcon color={category.color} size={18} value={category.icon} />}
+                            {category.name}
+                          </strong>
+                          <span>
+                            {category.icon
+                              ? (findCategoryIcon(category.icon)?.label ?? "Legacy icon")
+                              : "No icon"}
+                          </span>
                         </div>
                         {category.archived_at && (
                           <span className="archive-badge">Archived</span>

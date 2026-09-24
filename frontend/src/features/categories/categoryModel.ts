@@ -9,20 +9,16 @@ export type Category = {
   archived_at: string | null;
 };
 
-export const CURATED_COLORS = [
-  "#22c55e",
-  "#14b8a6",
-  "#8b5cf6",
-  "#38bdf8",
-  "#f97316",
-  "#ef4444",
-  "#eab308",
-  "#6366f1",
-  "#ec4899",
-  "#a855f7",
-  "#06b6d4",
-  "#94a3b8",
-] as const;
+const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
+
+export function normalizeCategoryColor(value: string): string | null {
+  const normalized = value.trim().toLowerCase();
+  return HEX_COLOR_PATTERN.test(normalized) ? normalized : null;
+}
+
+export function isValidCategoryColor(value: string): boolean {
+  return normalizeCategoryColor(value) !== null;
+}
 
 export function categoryTypeLabel(type: CategoryType): string {
   return type === "inflow" ? "Inflow" : "Outflow";

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: namicash-staging
+  labels:
+    app.kubernetes.io/part-of: namicash
+    app.kubernetes.io/environment: staging

@@ -66,7 +66,7 @@ def _month_start_or_422(value: date) -> date:
 
 def _entries(transactions: list[Transaction]) -> list[FinancialEntry]:
     return [
-        FinancialEntry(CashFlowType(transaction.transaction_type.value), transaction.amount_minor)
+        FinancialEntry(CashFlowType(transaction.transaction_type.value), transaction.base_amount_minor)
         for transaction in transactions
     ]
 
@@ -276,6 +276,12 @@ def _transaction_response(transaction: Transaction) -> DashboardTransactionRespo
         category_name=transaction.category.name,
         category_color=transaction.category.color,
         amount_minor=transaction.amount_minor,
+        currency_code=transaction.currency_code,
+        base_amount_minor=transaction.base_amount_minor,
+        base_currency_code=transaction.base_currency_code,
+        exchange_rate=transaction.exchange_rate,
+        exchange_rate_date=transaction.exchange_rate_date,
+        exchange_rate_source=transaction.exchange_rate_source,
         transaction_date=transaction.transaction_date,
         notes=transaction.notes,
         created_at=transaction.created_at,
@@ -401,6 +407,7 @@ def get_dashboard(
         )
     )
     return DashboardResponse(
+        base_currency_code=preferences.currency_code if preferences else "PHP",
         amount_minor=summary.budget_minor,
         used_minor=summary.budget_used_minor,
         remaining_minor=summary.budget_remaining_minor,
@@ -616,6 +623,7 @@ def get_budget_cycle(
         )
     preferences = db.get(UserPreferences, current_user.id)
     return BudgetCycleResponse(
+        base_currency_code=preferences.currency_code if preferences else "PHP",
         month_start=month.start,
         month_end=month.end,
         amount_minor=summary.budget_minor,
@@ -776,7 +784,12 @@ def set_category_budget(
             CategoryBudget.month_start == month_start,
         )
     )
-    if category_budget is None:
+    if payload.amount_minor is None:
+        if category_budget is not None:
+            db.delete(category_budget)
+            db.flush()
+        category_budget_id = category.id
+    elif category_budget is None:
         category_budget = CategoryBudget(
             user_id=current_user.id,
             category_id=category_id,
@@ -784,10 +797,12 @@ def set_category_budget(
             amount_minor=payload.amount_minor,
         )
         db.add(category_budget)
+        category_budget_id = category_budget.id
     else:
         category_budget.amount_minor = payload.amount_minor
+        category_budget_id = category_budget.id
     db.flush()
-    _audit(db, "budget.category_allocation_set", current_user, request, category_budget.id)
+    _audit(db, "budget.category_allocation_set", current_user, request, category_budget_id)
     db.commit()
     month = calendar_month_period(month_start)
     transactions = list(
@@ -800,7 +815,7 @@ def set_category_budget(
             )
         )
     )
-    allocation = calculate_budget_allocation(_entries(transactions), category_budget.amount_minor)
+    allocation = calculate_budget_allocation(_entries(transactions), payload.amount_minor)
     return CategoryBudgetResponse(
         category_id=category.id,
         category_name=category.name,

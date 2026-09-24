@@ -10,7 +10,13 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from sqlalchemy import Select, case, delete, func, or_, select
 
-from app.api.dependencies import ActiveUser, CsrfProtectedUser, DatabaseSession, owned_by_user
+from app.api.dependencies import (
+    ActiveUser,
+    AppSettings,
+    CsrfProtectedUser,
+    DatabaseSession,
+    owned_by_user,
+)
 from app.api.schemas import (
     StatementTransactionResponse,
     TransactionBulkDeleteRequest,
@@ -20,8 +26,26 @@ from app.api.schemas import (
     TransactionResponse,
     TransactionUpdateRequest,
 )
-from app.db.models import AuditEvent, Category, PaydaySchedule, Transaction, TransactionType
+from app.db.models import (
+    AuditEvent,
+    Category,
+    PaydaySchedule,
+    Transaction,
+    TransactionType,
+    UserPreferences,
+)
+from app.domain.currency import (
+    IdentityConversion,
+    convert_amount_minor,
+    identity_conversion,
+    normalize_currency_code,
+)
 from app.domain.periods import calendar_month_period, versioned_payday_period
+from app.services.exchange_rates import (
+    ExchangeRateError,
+    ExchangeRateProviderError,
+    create_exchange_rate_service,
+)
 
 router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
 
@@ -69,6 +93,23 @@ def _clean_text(value: str, field_name: str) -> str:
     return cleaned
 
 
+def _require_active_currency_selection(currency_code: str, db: DatabaseSession, settings: AppSettings) -> str:
+    currency = normalize_currency_code(currency_code)
+    try:
+        is_available = create_exchange_rate_service(db, settings).is_available_for_new_selection(currency)
+    except ExchangeRateProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Currency choices are temporarily unavailable.",
+        ) from exc
+    if not is_available:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Currency is not currently supported by Frankfurter.",
+        )
+    return currency
+
+
 def _clean_notes(value: str | None) -> str | None:
     if value is None:
         return None
@@ -85,10 +126,73 @@ def _serialize(transaction: Transaction) -> TransactionResponse:
         category_name=category.name,
         category_color=category.color,
         amount_minor=transaction.amount_minor,
+        currency_code=transaction.currency_code,
+        base_amount_minor=transaction.base_amount_minor,
+        base_currency_code=transaction.base_currency_code,
+        exchange_rate=transaction.exchange_rate,
+        exchange_rate_date=transaction.exchange_rate_date,
+        exchange_rate_source=transaction.exchange_rate_source,
         transaction_date=transaction.transaction_date,
         notes=transaction.notes,
         created_at=transaction.created_at,
         updated_at=transaction.updated_at,
+    )
+
+
+def _base_currency(db: DatabaseSession, user_id: uuid.UUID) -> str:
+    preferences = db.get(UserPreferences, user_id)
+    if preferences is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Account currency settings are unavailable.",
+        )
+    try:
+        return normalize_currency_code(preferences.currency_code)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Account currency settings are inconsistent.",
+        ) from exc
+
+
+def _conversion_snapshot(
+    db: DatabaseSession,
+    settings,
+    amount_minor: int,
+    currency_code: str,
+    base_currency_code: str,
+    transaction_date: date,
+) -> IdentityConversion:
+    if currency_code == base_currency_code:
+        return identity_conversion(amount_minor, base_currency_code, transaction_date)
+    try:
+        rate = create_exchange_rate_service(db, settings).get_exchange_rate(
+            currency_code, base_currency_code, transaction_date
+        )
+        base_amount_minor = convert_amount_minor(
+            amount_minor, currency_code, base_currency_code, rate.rate
+        )
+    except ExchangeRateProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The exchange-rate service is currently unavailable.",
+        ) from exc
+    except ExchangeRateError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No usable exchange rate is available for that date.",
+        ) from exc
+    except (ArithmeticError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The transaction amount could not be converted.",
+        ) from exc
+    return IdentityConversion(
+        base_amount_minor=base_amount_minor,
+        base_currency_code=base_currency_code,
+        exchange_rate=rate.rate,
+        exchange_rate_date=rate.effective_date,
+        exchange_rate_source=rate.source,
     )
 
 
@@ -163,6 +267,7 @@ def create_transaction(
     request: Request,
     current_user: CsrfProtectedUser,
     db: DatabaseSession,
+    settings: AppSettings,
 ) -> TransactionResponse:
     _active_owned_category_or_422(
         db,
@@ -170,12 +275,25 @@ def create_transaction(
         user_id=current_user.id,
         transaction_type=payload.transaction_type,
     )
+    base_currency = _base_currency(db, current_user.id)
+    currency = normalize_currency_code(payload.currency_code or base_currency)
+    if currency != base_currency:
+        currency = _require_active_currency_selection(currency, db, settings)
+    conversion = _conversion_snapshot(
+        db, settings, payload.amount_minor, currency, base_currency, payload.transaction_date
+    )
     transaction = Transaction(
         user_id=current_user.id,
         category_id=payload.category_id,
         name=_clean_text(payload.name, "Name"),
         transaction_type=payload.transaction_type,
         amount_minor=payload.amount_minor,
+        currency_code=currency,
+        base_amount_minor=conversion.base_amount_minor,
+        base_currency_code=conversion.base_currency_code,
+        exchange_rate=conversion.exchange_rate,
+        exchange_rate_date=conversion.exchange_rate_date,
+        exchange_rate_source=conversion.exchange_rate_source,
         transaction_date=payload.transaction_date,
         notes=_clean_notes(payload.notes),
     )
@@ -218,9 +336,9 @@ def list_transactions(
                 case(
                     (
                         Transaction.transaction_type == TransactionType.INFLOW,
-                        Transaction.amount_minor,
+                        Transaction.base_amount_minor,
                     ),
-                    else_=-Transaction.amount_minor,
+                    else_=-Transaction.base_amount_minor,
                 )
             )
             .over(
@@ -370,6 +488,7 @@ def update_transaction(
     request: Request,
     current_user: CsrfProtectedUser,
     db: DatabaseSession,
+    settings: AppSettings,
 ) -> TransactionResponse:
     transaction = _owned_transaction_or_404(db, transaction_id, current_user.id)
     values = payload.model_dump(exclude_unset=True)
@@ -387,10 +506,30 @@ def update_transaction(
         )
     if "name" in values:
         transaction.name = _clean_text(values["name"], "Name")
-    if "amount_minor" in values:
-        transaction.amount_minor = values["amount_minor"]
-    if "transaction_date" in values:
-        transaction.transaction_date = values["transaction_date"]
+    financial_fields = {"amount_minor", "currency_code", "transaction_date"}
+    if financial_fields.intersection(values):
+        base_currency = _base_currency(db, current_user.id)
+        if normalize_currency_code(transaction.base_currency_code) != base_currency:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Transaction base currency is inconsistent with the account.",
+            )
+        next_amount = values.get("amount_minor", transaction.amount_minor)
+        next_currency = normalize_currency_code(values.get("currency_code", transaction.currency_code))
+        if next_currency != transaction.currency_code and next_currency != base_currency:
+            next_currency = _require_active_currency_selection(next_currency, db, settings)
+        next_date = values.get("transaction_date", transaction.transaction_date)
+        conversion = _conversion_snapshot(
+            db, settings, next_amount, next_currency, base_currency, next_date
+        )
+        transaction.amount_minor = next_amount
+        transaction.currency_code = next_currency
+        transaction.transaction_date = next_date
+        transaction.base_amount_minor = conversion.base_amount_minor
+        transaction.base_currency_code = conversion.base_currency_code
+        transaction.exchange_rate = conversion.exchange_rate
+        transaction.exchange_rate_date = conversion.exchange_rate_date
+        transaction.exchange_rate_source = conversion.exchange_rate_source
     if "notes" in values:
         transaction.notes = _clean_notes(values["notes"])
     transaction.transaction_type = next_type

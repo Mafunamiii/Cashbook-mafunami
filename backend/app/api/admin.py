@@ -15,13 +15,15 @@ import sentry_sdk
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select, update
 
-from app.api.dependencies import Administrator, DatabaseSession, require_csrf
+from app.api.dependencies import Administrator, AppSettings, DatabaseSession, require_csrf
 from app.api.schemas import (
     AccountStatusUpdateRequest,
     AdminUserResponse,
     DebugClearResponse,
     DebugCycleSeedResponse,
     DebugSeedResponse,
+    LegacyCurrencyMigrationRequest,
+    LegacyCurrencyMigrationResponse,
     TemporaryPasswordResponse,
 )
 from app.core.security import generate_secret, hash_password, utc_now
@@ -35,9 +37,12 @@ from app.db.models import (
     Transaction,
     TransactionType,
     User,
+    UserPreferences,
 )
 from app.db.models import Session as AuthSession
+from app.domain.currency import IDENTITY_EXCHANGE_RATE, IDENTITY_EXCHANGE_RATE_SOURCE
 from app.domain.periods import ReportingPeriod, payday_period
+from app.services.exchange_rates import ExchangeRateProviderError, create_exchange_rate_service
 
 router = APIRouter(prefix="/api/v1/admin", tags=["administration"])
 
@@ -143,6 +148,114 @@ def list_users(administrator: Administrator, db: DatabaseSession) -> list[AdminU
         AdminUserResponse.model_validate(user)
         for user in db.scalars(select(User).order_by(User.email))
     ]
+
+
+@router.post(
+    "/users/{user_id}/legacy-currency-migration",
+    response_model=LegacyCurrencyMigrationResponse,
+)
+def migrate_legacy_currency(
+    user_id: uuid.UUID,
+    payload: LegacyCurrencyMigrationRequest,
+    request: Request,
+    administrator: Administrator,
+    db: DatabaseSession,
+    settings: AppSettings,
+    _: None = Depends(require_csrf),
+) -> LegacyCurrencyMigrationResponse:
+    """Reassign legacy monetary labels without performing FX conversion."""
+    target = db.scalar(select(User).where(User.id == user_id).with_for_update())
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    try:
+        supported = create_exchange_rate_service(db, settings).is_available_for_new_selection(
+            payload.currency_code
+        )
+    except ExchangeRateProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Currency choices are temporarily unavailable.",
+        ) from exc
+    if not supported:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Currency is not currently supported by Frankfurter.",
+        )
+    preferences = db.scalar(
+        select(UserPreferences).where(UserPreferences.user_id == user_id).with_for_update()
+    )
+    if preferences is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Account currency settings are unavailable.",
+        )
+    if payload.currency_code == preferences.currency_code:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Legacy currency migration has already been resolved.",
+        )
+    legacy_transactions = list(
+        db.scalars(
+            select(Transaction)
+            .where(
+                Transaction.user_id == user_id,
+                Transaction.legacy_currency_record.is_(True),
+            )
+            .with_for_update()
+        )
+    )
+    if not legacy_transactions:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account has no unresolved legacy currency records.",
+        )
+    if (
+        db.scalar(
+            select(Transaction.id)
+            .where(
+                Transaction.user_id == user_id,
+                Transaction.legacy_currency_record.is_(False),
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account contains post-migration transactions and is not eligible for legacy currency migration.",
+        )
+    previous_currency = preferences.currency_code
+    for transaction in legacy_transactions:
+        transaction.currency_code = payload.currency_code
+        transaction.base_currency_code = payload.currency_code
+        transaction.base_amount_minor = transaction.amount_minor
+        transaction.exchange_rate = IDENTITY_EXCHANGE_RATE
+        transaction.exchange_rate_source = IDENTITY_EXCHANGE_RATE_SOURCE
+        transaction.exchange_rate_date = transaction.transaction_date
+        transaction.legacy_currency_record = False
+    preferences.currency_code = payload.currency_code
+    db.add(
+        AuditEvent(
+            actor_user_id=administrator.id,
+            subject_user_id=target.id,
+            event_type="admin.legacy_currency_migrated",
+            metadata_json={
+                "previous_currency_code": previous_currency,
+                "new_currency_code": payload.currency_code,
+                "legacy_transactions_migrated": len(legacy_transactions),
+                "fx_conversion_performed": False,
+            },
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent", "")[:512] or None,
+        )
+    )
+    db.commit()
+    return LegacyCurrencyMigrationResponse(
+        user_id=target.id,
+        previous_currency_code=previous_currency,
+        currency_code=preferences.currency_code,
+        legacy_transactions_migrated=len(legacy_transactions),
+    )
 
 
 @router.patch("/users/{user_id}/account", response_model=AdminUserResponse)
