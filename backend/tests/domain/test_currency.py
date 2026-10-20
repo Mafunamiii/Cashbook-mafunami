@@ -39,8 +39,9 @@ def test_convert_amount_minor_uses_forward_rate_direction_and_decimal_math() -> 
 
 
 def test_convert_amount_minor_uses_half_even_rounding() -> None:
-    assert convert_amount_minor(1, "PHP", "AED", Decimal("0.005")) == 0
-    assert convert_amount_minor(3, "PHP", "AED", Decimal("0.005")) == 2
+    assert convert_amount_minor(1, "PHP", "AED", Decimal("0.5")) == 0
+    assert convert_amount_minor(3, "PHP", "AED", Decimal("0.5")) == 2
+    assert convert_amount_minor(5, "PHP", "AED", Decimal("0.5")) == 2
 
 
 def test_convert_amount_minor_rejects_float_rates() -> None:

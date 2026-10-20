@@ -70,7 +70,9 @@ class FrankfurterV2Client:
         if cls._active_currency_codes is not None and now < cls._active_currency_codes_expires_at:
             return cls._active_currency_codes
         try:
-            response = self._client.get(f"{self._base_url}/currencies", timeout=FRANKFURTER_TIMEOUT_SECONDS)
+            response = self._client.get(
+                f"{self._base_url}/currencies", timeout=FRANKFURTER_TIMEOUT_SECONDS
+            )
             response.raise_for_status()
             payload: Any = json.loads(response.content)
         except (httpx.HTTPError, UnicodeDecodeError, ValueError, TypeError) as exc:
@@ -91,7 +93,9 @@ class FrankfurterV2Client:
         cls._active_currency_codes_expires_at = now + FRANKFURTER_CATALOG_TTL_SECONDS
         return codes
 
-    def get_rate(self, source_currency: str, target_currency: str, requested_date: date) -> ExchangeRateResult:
+    def get_rate(
+        self, source_currency: str, target_currency: str, requested_date: date
+    ) -> ExchangeRateResult:
         try:
             response = self._client.get(
                 f"{self._base_url}/rates",
@@ -117,9 +121,7 @@ class FrankfurterV2Client:
         except (UnicodeDecodeError, ValueError, TypeError) as exc:
             raise ExchangeRateProviderError("Frankfurter returned malformed JSON.") from exc
         if not isinstance(payload, list) or not payload:
-            raise ExchangeRateNotFoundError(
-                "Frankfurter returned no rate for the requested date."
-            )
+            raise ExchangeRateNotFoundError("Frankfurter returned no rate for the requested date.")
 
         matching_rows = [
             row
@@ -137,11 +139,15 @@ class FrankfurterV2Client:
             effective_date = date.fromisoformat(row["date"])
             rate = Decimal(row["rate"])
         except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
-            raise ExchangeRateProviderError("Frankfurter returned a malformed rate record.") from exc
+            raise ExchangeRateProviderError(
+                "Frankfurter returned a malformed rate record."
+            ) from exc
         if not rate.is_finite() or rate <= 0:
             raise ExchangeRateProviderError("Frankfurter returned an invalid exchange rate.")
         if effective_date > requested_date:
-            raise ExchangeRateProviderError("Frankfurter returned a rate later than the requested date.")
+            raise ExchangeRateProviderError(
+                "Frankfurter returned a rate later than the requested date."
+            )
         return ExchangeRateResult(rate, requested_date, effective_date, FRANKFURTER_V2_SOURCE)
 
 

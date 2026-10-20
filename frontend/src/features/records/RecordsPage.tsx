@@ -4,7 +4,11 @@ import type { FormEvent } from "react";
 import type { Category, CategoryType } from "../categories/categoryModel";
 import type { Transaction } from "../transactions/transactionModel";
 import { majorAmount, toMinorUnits } from "../transactions/transactionModel";
-import { currencyByCode, formatCurrency, useCurrencies } from "../transactions/currency";
+import {
+  currencyByCode,
+  formatCurrency,
+  useCurrencies,
+} from "../transactions/currency";
 import type { Currency } from "../transactions/currency";
 import type { CurrencyCode } from "../transactions/currency";
 
@@ -63,7 +67,8 @@ function csrfToken(): string | undefined {
 function signedAmount(item: StatementTransaction, minorUnit = 2) {
   return `${item.transaction_type === "inflow" ? "+" : "−"}${formatCurrency(
     item.amount_minor,
-    item.currency_code, minorUnit,
+    item.currency_code,
+    minorUnit,
   )}`;
 }
 
@@ -814,8 +819,12 @@ export function RecordsPage() {
                   }
                   value={editor.currency_code}
                 >
-                  {!currencies.some((currency) => currency.code === editor.currency_code) && (
-                    <option value={editor.currency_code}>{editor.currency_code}</option>
+                  {!currencies.some(
+                    (currency) => currency.code === editor.currency_code,
+                  ) && (
+                    <option value={editor.currency_code}>
+                      {editor.currency_code}
+                    </option>
                   )}
                   {currencies.map((currency) => (
                     <option key={currency.code} value={currency.code}>
@@ -949,14 +958,28 @@ function RecordRow({
         </span>
       </td>
       <td className={`amount-column ${item.transaction_type}`}>
-        {signedAmount(item, currencyByCode(currencies, item.currency_code).minor_unit)}
+        {signedAmount(
+          item,
+          currencyByCode(currencies, item.currency_code).minor_unit,
+        )}
         {item.currency_code !== item.base_currency_code ? (
-          <small>≈ {formatCurrency(item.base_amount_minor, item.base_currency_code, currencyByCode(currencies, item.base_currency_code).minor_unit)}</small>
+          <small>
+            ≈{" "}
+            {formatCurrency(
+              item.base_amount_minor,
+              item.base_currency_code,
+              currencyByCode(currencies, item.base_currency_code).minor_unit,
+            )}
+          </small>
         ) : null}
       </td>
       <td className="amount-column">
         {item.running_balance_minor < 0 ? "−" : ""}
-        {formatCurrency(Math.abs(item.running_balance_minor), item.base_currency_code, currencyByCode(currencies, item.base_currency_code).minor_unit)}
+        {formatCurrency(
+          Math.abs(item.running_balance_minor),
+          item.base_currency_code,
+          currencyByCode(currencies, item.base_currency_code).minor_unit,
+        )}
       </td>
       <td className="record-actions">
         <button className="text-button" onClick={onEdit} type="button">
@@ -1014,9 +1037,19 @@ function RecordCard({
           </small>
         </div>
         <b className={item.transaction_type}>
-          {signedAmount(item, currencyByCode(currencies, item.currency_code).minor_unit)}
+          {signedAmount(
+            item,
+            currencyByCode(currencies, item.currency_code).minor_unit,
+          )}
           {item.currency_code !== item.base_currency_code ? (
-            <small>≈ {formatCurrency(item.base_amount_minor, item.base_currency_code, currencyByCode(currencies, item.base_currency_code).minor_unit)}</small>
+            <small>
+              ≈{" "}
+              {formatCurrency(
+                item.base_amount_minor,
+                item.base_currency_code,
+                currencyByCode(currencies, item.base_currency_code).minor_unit,
+              )}
+            </small>
           ) : null}
         </b>
       </div>
@@ -1025,7 +1058,11 @@ function RecordCard({
           Balance{" "}
           <strong>
             {item.running_balance_minor < 0 ? "−" : ""}
-            {formatCurrency(Math.abs(item.running_balance_minor), item.base_currency_code, currencyByCode(currencies, item.base_currency_code).minor_unit)}
+            {formatCurrency(
+              Math.abs(item.running_balance_minor),
+              item.base_currency_code,
+              currencyByCode(currencies, item.base_currency_code).minor_unit,
+            )}
           </strong>
         </span>
         {!isSelecting && (

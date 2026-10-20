@@ -39,7 +39,9 @@ from app.db.models import (
     User,
     UserPreferences,
 )
-from app.db.models import Session as AuthSession
+from app.db.models import (
+    Session as AuthSession,
+)
 from app.domain.currency import IDENTITY_EXCHANGE_RATE, IDENTITY_EXCHANGE_RATE_SOURCE
 from app.domain.periods import ReportingPeriod, payday_period
 from app.services.exchange_rates import ExchangeRateProviderError, create_exchange_rate_service

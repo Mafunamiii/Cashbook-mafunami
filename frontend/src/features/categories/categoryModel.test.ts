@@ -26,8 +26,12 @@ describe("category model", () => {
   });
 
   it("searches the curated icon registry by labels and keywords", () => {
-    expect(searchCategoryIcons("restaurant").map((icon) => icon.key)).toContain("utensils");
-    expect(searchCategoryIcons("money", "Finance").map((icon) => icon.key)).toContain("coins");
+    expect(searchCategoryIcons("restaurant").map((icon) => icon.key)).toContain(
+      "utensils",
+    );
+    expect(
+      searchCategoryIcons("money", "Finance").map((icon) => icon.key),
+    ).toContain("coins");
     expect(searchCategoryIcons("money", "Health")).toHaveLength(0);
   });
 

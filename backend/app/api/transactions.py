@@ -93,10 +93,14 @@ def _clean_text(value: str, field_name: str) -> str:
     return cleaned
 
 
-def _require_active_currency_selection(currency_code: str, db: DatabaseSession, settings: AppSettings) -> str:
+def _require_active_currency_selection(
+    currency_code: str, db: DatabaseSession, settings: AppSettings
+) -> str:
     currency = normalize_currency_code(currency_code)
     try:
-        is_available = create_exchange_rate_service(db, settings).is_available_for_new_selection(currency)
+        is_available = create_exchange_rate_service(db, settings).is_available_for_new_selection(
+            currency
+        )
     except ExchangeRateProviderError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -515,7 +519,9 @@ def update_transaction(
                 detail="Transaction base currency is inconsistent with the account.",
             )
         next_amount = values.get("amount_minor", transaction.amount_minor)
-        next_currency = normalize_currency_code(values.get("currency_code", transaction.currency_code))
+        next_currency = normalize_currency_code(
+            values.get("currency_code", transaction.currency_code)
+        )
         if next_currency != transaction.currency_code and next_currency != base_currency:
             next_currency = _require_active_currency_selection(next_currency, db, settings)
         next_date = values.get("transaction_date", transaction.transaction_date)

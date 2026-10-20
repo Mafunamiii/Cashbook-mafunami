@@ -27,7 +27,9 @@ function csrfToken(): string | undefined {
 
 // This helper is exported for focused form-state tests; it is not a component.
 // eslint-disable-next-line react-refresh/only-export-components
-export function initialForm(currencyCode: CurrencyCode = "PHP"): TransactionForm {
+export function initialForm(
+  currencyCode: CurrencyCode = "PHP",
+): TransactionForm {
   return {
     name: "",
     transaction_type: "outflow",
@@ -148,9 +150,14 @@ export function AddTransaction({ onSaved }: { onSaved?: () => void }) {
       setError("Choose a category.");
       return;
     }
-    const amountMinor = toMinorUnits(form.amount_minor, selectedCurrency.minor_unit);
+    const amountMinor = toMinorUnits(
+      form.amount_minor,
+      selectedCurrency.minor_unit,
+    );
     if (amountMinor === null) {
-      setError(`Enter a valid amount with up to ${selectedCurrency.minor_unit} decimal places.`);
+      setError(
+        `Enter a valid amount with up to ${selectedCurrency.minor_unit} decimal places.`,
+      );
       return;
     }
     setIsSaving(true);
@@ -221,7 +228,11 @@ export function AddTransaction({ onSaved }: { onSaved?: () => void }) {
                   {error}
                 </p>
               )}
-              {currenciesError && <p className="form-error" role="alert">{currenciesError}</p>}
+              {currenciesError && (
+                <p className="form-error" role="alert">
+                  {currenciesError}
+                </p>
+              )}
               <label>
                 Transaction name
                 <input
@@ -282,8 +293,12 @@ export function AddTransaction({ onSaved }: { onSaved?: () => void }) {
                   }
                   value={form.currency_code}
                 >
-                  {!currencies.some((currency) => currency.code === form.currency_code) && (
-                    <option value={form.currency_code}>{form.currency_code}</option>
+                  {!currencies.some(
+                    (currency) => currency.code === form.currency_code,
+                  ) && (
+                    <option value={form.currency_code}>
+                      {form.currency_code}
+                    </option>
                   )}
                   {currencies.map((currency) => (
                     <option key={currency.code} value={currency.code}>
@@ -296,12 +311,24 @@ export function AddTransaction({ onSaved }: { onSaved?: () => void }) {
                 Amount <span className="hint">{form.currency_code}</span>
                 <input
                   inputMode="decimal"
-                  min={selectedCurrency.minor_unit ? `0.${"0".repeat(selectedCurrency.minor_unit - 1)}1` : "1"}
+                  min={
+                    selectedCurrency.minor_unit
+                      ? `0.${"0".repeat(selectedCurrency.minor_unit - 1)}1`
+                      : "1"
+                  }
                   onChange={(event) =>
                     setForm({ ...form, amount_minor: event.target.value })
                   }
-                  placeholder={selectedCurrency.minor_unit === 0 ? "e.g. 200" : "e.g. 200.50"}
-                  step={selectedCurrency.minor_unit ? `0.${"0".repeat(selectedCurrency.minor_unit - 1)}1` : "1"}
+                  placeholder={
+                    selectedCurrency.minor_unit === 0
+                      ? "e.g. 200"
+                      : "e.g. 200.50"
+                  }
+                  step={
+                    selectedCurrency.minor_unit
+                      ? `0.${"0".repeat(selectedCurrency.minor_unit - 1)}1`
+                      : "1"
+                  }
                   required
                   type="number"
                   value={form.amount_minor}

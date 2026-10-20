@@ -15,7 +15,6 @@ from app.services.exchange_rates import (
     FrankfurterV2Client,
 )
 
-
 REQUESTED_DATE = date(2026, 8, 9)
 
 
@@ -73,7 +72,9 @@ def test_catalog_outage_does_not_admit_a_new_currency(
 ) -> None:
     monkeypatch.setattr(FrankfurterV2Client, "_active_currency_codes", None)
     monkeypatch.setattr(FrankfurterV2Client, "_active_currency_codes_expires_at", 0.0)
-    service = ExchangeRateService(FakeSession(), _provider_with(lambda request: httpx.Response(503)))
+    service = ExchangeRateService(
+        FakeSession(), _provider_with(lambda request: httpx.Response(503))
+    )
 
     with pytest.raises(ExchangeRateProviderError, match="catalog is unavailable"):
         service.is_available_for_new_selection("USD")
@@ -116,8 +117,12 @@ def test_identity_avoids_http_and_cache(currency: str) -> None:
 
 def test_cache_hit_avoids_http_and_returns_persisted_snapshot() -> None:
     cached = ExchangeRateCache(
-        source_currency_code="AED", target_currency_code="PHP", requested_date=REQUESTED_DATE,
-        effective_date=date(2026, 8, 7), rate=Decimal("16.566"), source=FRANKFURTER_V2_SOURCE,
+        source_currency_code="AED",
+        target_currency_code="PHP",
+        requested_date=REQUESTED_DATE,
+        effective_date=date(2026, 8, 7),
+        rate=Decimal("16.566"),
+        source=FRANKFURTER_V2_SOURCE,
     )
     db = FakeSession(cached)
     provider = _provider_with(lambda request: pytest.fail("HTTP must not be called"))
@@ -152,9 +157,19 @@ def test_duplicate_cache_insert_returns_concurrently_persisted_record() -> None:
     ("handler", "error", "message"),
     [
         (lambda request: httpx.Response(503), ExchangeRateProviderError, "HTTP 503"),
-        (lambda request: httpx.Response(200, content=b"not-json"), ExchangeRateProviderError, "malformed JSON"),
+        (
+            lambda request: httpx.Response(200, content=b"not-json"),
+            ExchangeRateProviderError,
+            "malformed JSON",
+        ),
         (lambda request: httpx.Response(200, json=[]), ExchangeRateNotFoundError, "no rate"),
-        (lambda request: httpx.Response(200, json=[{"date": "2026-08-09", "base": "AED", "quote": "USD", "rate": 1}]), ExchangeRateNotFoundError, "no matching rate"),
+        (
+            lambda request: httpx.Response(
+                200, json=[{"date": "2026-08-09", "base": "AED", "quote": "USD", "rate": 1}]
+            ),
+            ExchangeRateNotFoundError,
+            "no matching rate",
+        ),
     ],
 )
 def test_provider_errors_are_clear(handler, error: type[Exception], message: str) -> None:
