@@ -66,7 +66,9 @@ def _month_start_or_422(value: date) -> date:
 
 def _entries(transactions: list[Transaction]) -> list[FinancialEntry]:
     return [
-        FinancialEntry(CashFlowType(transaction.transaction_type.value), transaction.base_amount_minor)
+        FinancialEntry(
+            CashFlowType(transaction.transaction_type.value), transaction.base_amount_minor
+        )
         for transaction in transactions
     ]
 

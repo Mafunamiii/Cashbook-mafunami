@@ -17,20 +17,20 @@ from app.db.models import (
     CategoryBudgetResetHistory,
     PaydayAllowance,
     PaydaySchedule,
-    Session as AuthSession,
     Transaction,
     TransactionType,
     User,
     UserPreferences,
     UserRole,
 )
+from app.db.models import (
+    Session as AuthSession,
+)
 
 pytestmark = pytest.mark.integration
 
 
-def register(
-    client: TestClient, email: str, display_name: str, currency_code: str = "PHP"
-) -> dict:
+def register(client: TestClient, email: str, display_name: str, currency_code: str = "PHP") -> dict:
     response = client.post(
         "/api/v1/auth/register",
         json={
@@ -237,11 +237,14 @@ def test_category_budget_clear_unsets_without_collapsing_explicit_zero(
     )
     headers = csrf_headers(client, registered["csrf_token"])
     for category, amount in zip(categories[:2], (12_500, 0), strict=True):
-        assert client.put(
-            f"/api/v1/budgets/2026-08-01/categories/{category.id}",
-            json={"amount_minor": amount},
-            headers=headers,
-        ).status_code == 200
+        assert (
+            client.put(
+                f"/api/v1/budgets/2026-08-01/categories/{category.id}",
+                json={"amount_minor": amount},
+                headers=headers,
+            ).status_code
+            == 200
+        )
 
     cleared = client.put(
         f"/api/v1/budgets/2026-08-01/categories/{categories[0].id}",
@@ -257,13 +260,16 @@ def test_category_budget_clear_unsets_without_collapsing_explicit_zero(
     assert by_category[str(categories[0].id)]["amount_minor"] is None
     assert by_category[str(categories[1].id)]["amount_minor"] == 0
     assert by_category[str(categories[2].id)]["amount_minor"] is None
-    assert db_session.scalar(
-        select(CategoryBudget).where(
-            CategoryBudget.user_id == uuid.UUID(user_id),
-            CategoryBudget.category_id == categories[0].id,
-            CategoryBudget.month_start == date(2026, 8, 1),
+    assert (
+        db_session.scalar(
+            select(CategoryBudget).where(
+                CategoryBudget.user_id == uuid.UUID(user_id),
+                CategoryBudget.category_id == categories[0].id,
+                CategoryBudget.month_start == date(2026, 8, 1),
+            )
         )
-    ) is None
+        is None
+    )
 
     omitted = client.put(
         f"/api/v1/budgets/2026-08-01/categories/{categories[1].id}",
@@ -282,7 +288,7 @@ def test_category_budget_clear_unsets_without_collapsing_explicit_zero(
 
 
 def test_category_budget_payday_reset_preserves_cycle_history(
-    client: TestClient, db_session: Session
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registered = register(client, "category-reset@example.test", "Category Reset")
     user_id = registered["user"]["id"]
@@ -306,6 +312,12 @@ def test_category_budget_payday_reset_preserves_cycle_history(
     category.budget_reset_anchor = date(2026, 7, 2)
     db_session.commit()
 
+    class FrozenDate(date):
+        @classmethod
+        def today(cls) -> date:
+            return cls(2026, 8, 3)
+
+    monkeypatch.setattr("app.api.budgets.date", FrozenDate)
     cycle = client.get("/api/v1/budgets/2026-08-01")
     assert cycle.status_code == 200, cycle.text
     allocation = next(
@@ -646,6 +658,7 @@ def test_settings_are_owner_scoped_and_update_profile_and_appearance(client: Tes
             "budget_used": True,
         },
         "payday_setup_notice_dismissed": False,
+        "has_financial_data": False,
     }
 
     updated = client.patch(
@@ -656,6 +669,7 @@ def test_settings_are_owner_scoped_and_update_profile_and_appearance(client: Tes
     assert updated.status_code == 200, updated.text
     assert updated.json()["display_name"] == "After"
     assert updated.json()["appearance_preference"] == "dark"
+    assert updated.json()["has_financial_data"] is False
     assert "password_hash" not in updated.text
 
 
@@ -663,7 +677,8 @@ def test_account_currency_can_change_without_financial_data(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "app.api.settings.create_exchange_rate_service", lambda db, settings: ActiveCurrencyService()
+        "app.api.settings.create_exchange_rate_service",
+        lambda db, settings: ActiveCurrencyService(),
     )
     registered = register(client, "currency@example.test", "Currency User")
     headers = csrf_headers(client, registered["csrf_token"])
@@ -698,9 +713,7 @@ def test_account_currency_rejects_unsupported_or_malformed_code(
 def test_account_currency_change_is_locked_by_financial_data(
     client: TestClient, db_session: Session, financial_model: type
 ) -> None:
-    registered = register(
-        client, f"currency-{financial_model.__tablename__}@example.test", "User"
-    )
+    registered = register(client, f"currency-{financial_model.__tablename__}@example.test", "User")
     user_id = uuid.UUID(registered["user"]["id"])
     category = category_for(db_session, registered["user"]["id"])
     schedule = PaydaySchedule(
@@ -716,9 +729,7 @@ def test_account_currency_change_is_locked_by_financial_data(
             transaction_date=date(2026, 8, 12),
         )
     elif financial_model is BudgetConfiguration:
-        record = BudgetConfiguration(
-            user_id=user_id, month_start=date(2026, 8, 1), amount_minor=1
-        )
+        record = BudgetConfiguration(user_id=user_id, month_start=date(2026, 8, 1), amount_minor=1)
     elif financial_model is CategoryBudget:
         record = CategoryBudget(
             user_id=user_id, category_id=category.id, month_start=date(2026, 8, 1), amount_minor=1
@@ -746,7 +757,10 @@ def test_account_currency_change_is_locked_by_financial_data(
     headers = csrf_headers(client, registered["csrf_token"])
     blocked = client.patch("/api/v1/settings", json={"currency_code": "AED"}, headers=headers)
     assert blocked.status_code == 409
-    assert blocked.json()["detail"] == "Account currency cannot be changed after financial data exists."
+    assert (
+        blocked.json()["detail"]
+        == "Account currency cannot be changed after financial data exists."
+    )
 
     unchanged = client.patch("/api/v1/settings", json={"currency_code": "PHP"}, headers=headers)
     assert unchanged.status_code == 200, unchanged.text
@@ -757,7 +771,8 @@ def test_account_currency_lock_is_owner_scoped(
     client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "app.api.settings.create_exchange_rate_service", lambda db, settings: ActiveCurrencyService()
+        "app.api.settings.create_exchange_rate_service",
+        lambda db, settings: ActiveCurrencyService(),
     )
     first = register(client, "currency-lock-first@example.test", "First")
     first_category = category_for(db_session, first["user"]["id"])
@@ -956,7 +971,9 @@ def test_admin_account_management_is_role_guarded_and_never_returns_financial_da
 def test_admin_legacy_currency_migration_relabels_without_conversion(
     client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.api.admin.create_exchange_rate_service", lambda db, settings: ActiveCurrencyService())
+    monkeypatch.setattr(
+        "app.api.admin.create_exchange_rate_service", lambda db, settings: ActiveCurrencyService()
+    )
     admin_data = register(client, "migration-admin@example.test", "Migration Admin")
     target_data = register(client, "migration-target@example.test", "Migration Target")
     target_id = uuid.UUID(target_data["user"]["id"])
@@ -970,7 +987,9 @@ def test_admin_legacy_currency_migration_relabels_without_conversion(
         transaction_date=date(2026, 8, 1),
         legacy_currency_record=True,
     )
-    budget = BudgetConfiguration(user_id=target_id, month_start=date(2026, 8, 1), amount_minor=55_000)
+    budget = BudgetConfiguration(
+        user_id=target_id, month_start=date(2026, 8, 1), amount_minor=55_000
+    )
     allowance_schedule = PaydaySchedule(
         user_id=target_id, first_day=12, second_day=27, effective_from=date(2026, 8, 1)
     )
@@ -990,11 +1009,14 @@ def test_admin_legacy_currency_migration_relabels_without_conversion(
     administrator.role = UserRole.ADMIN
     db_session.commit()
 
-    assert client.post(
-        f"/api/v1/admin/users/{target_id}/legacy-currency-migration",
-        json={"currency_code": "AED", "confirmation": "MIGRATE LEGACY CURRENCY"},
-        headers=csrf_headers(client, target_data["csrf_token"]),
-    ).status_code == 403
+    assert (
+        client.post(
+            f"/api/v1/admin/users/{target_id}/legacy-currency-migration",
+            json={"currency_code": "AED", "confirmation": "MIGRATE LEGACY CURRENCY"},
+            headers=csrf_headers(client, target_data["csrf_token"]),
+        ).status_code
+        == 403
+    )
     admin_session = login(client, "migration-admin@example.test")
     response = client.post(
         f"/api/v1/admin/users/{target_id}/legacy-currency-migration",
@@ -1016,7 +1038,9 @@ def test_admin_legacy_currency_migration_relabels_without_conversion(
     assert db_session.get(PaydayAllowance, allowance.id).amount_minor == 12_000
     preferences = db_session.get(UserPreferences, target_id)
     assert preferences is not None and preferences.currency_code == "AED"
-    event = db_session.scalar(select(AuditEvent).where(AuditEvent.event_type == "admin.legacy_currency_migrated"))
+    event = db_session.scalar(
+        select(AuditEvent).where(AuditEvent.event_type == "admin.legacy_currency_migrated")
+    )
     assert event is not None
     assert event.actor_user_id == administrator.id and event.subject_user_id == target_id
     assert event.metadata_json == {
@@ -1025,27 +1049,48 @@ def test_admin_legacy_currency_migration_relabels_without_conversion(
         "legacy_transactions_migrated": 1,
         "fx_conversion_performed": False,
     }
-    assert client.post(
-        f"/api/v1/admin/users/{target_id}/legacy-currency-migration",
-        json={"currency_code": "PHP", "confirmation": "MIGRATE LEGACY CURRENCY"},
-        headers=csrf_headers(client, admin_session["csrf_token"]),
-    ).status_code == 409
+    assert (
+        client.post(
+            f"/api/v1/admin/users/{target_id}/legacy-currency-migration",
+            json={"currency_code": "PHP", "confirmation": "MIGRATE LEGACY CURRENCY"},
+            headers=csrf_headers(client, admin_session["csrf_token"]),
+        ).status_code
+        == 409
+    )
 
 
 def test_legacy_currency_migration_rejects_nonlegacy_transactions(
     client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("app.api.admin.create_exchange_rate_service", lambda db, settings: ActiveCurrencyService())
+    monkeypatch.setattr(
+        "app.api.admin.create_exchange_rate_service", lambda db, settings: ActiveCurrencyService()
+    )
     admin_data = register(client, "mixed-admin@example.test", "Mixed Admin")
     target_data = register(client, "mixed-target@example.test", "Mixed Target")
     target_id = uuid.UUID(target_data["user"]["id"])
     category = category_for(db_session, target_data["user"]["id"])
-    db_session.add_all([
-        Transaction(user_id=target_id, category_id=category.id, transaction_type=category.transaction_type,
-                    name="Legacy", amount_minor=100, transaction_date=date(2026, 8, 1), legacy_currency_record=True),
-        Transaction(user_id=target_id, category_id=category.id, transaction_type=category.transaction_type,
-                    name="New", amount_minor=200, transaction_date=date(2026, 8, 2), legacy_currency_record=False),
-    ])
+    db_session.add_all(
+        [
+            Transaction(
+                user_id=target_id,
+                category_id=category.id,
+                transaction_type=category.transaction_type,
+                name="Legacy",
+                amount_minor=100,
+                transaction_date=date(2026, 8, 1),
+                legacy_currency_record=True,
+            ),
+            Transaction(
+                user_id=target_id,
+                category_id=category.id,
+                transaction_type=category.transaction_type,
+                name="New",
+                amount_minor=200,
+                transaction_date=date(2026, 8, 2),
+                legacy_currency_record=False,
+            ),
+        ]
+    )
     administrator = db_session.get(User, uuid.UUID(admin_data["user"]["id"]))
     assert administrator is not None
     administrator.role = UserRole.ADMIN
@@ -1075,7 +1120,9 @@ def test_legacy_currency_migration_rolls_back_on_commit_failure(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("app.api.admin.create_exchange_rate_service", lambda db, settings: ActiveCurrencyService())
+    monkeypatch.setattr(
+        "app.api.admin.create_exchange_rate_service", lambda db, settings: ActiveCurrencyService()
+    )
     admin_data = register(client, "rollback-admin@example.test", "Rollback Admin")
     target_data = register(client, "rollback-target@example.test", "Rollback Target")
     target_id = uuid.UUID(target_data["user"]["id"])
@@ -1115,9 +1162,12 @@ def test_legacy_currency_migration_rolls_back_on_commit_failure(
     assert unchanged.amount_minor == 9_999
     assert unchanged.legacy_currency_record is True
     assert db_session.get(UserPreferences, target_id).currency_code == "PHP"
-    assert db_session.scalar(
-        select(AuditEvent.id).where(AuditEvent.event_type == "admin.legacy_currency_migrated")
-    ) is None
+    assert (
+        db_session.scalar(
+            select(AuditEvent.id).where(AuditEvent.event_type == "admin.legacy_currency_migrated")
+        )
+        is None
+    )
 
 
 def test_admin_demo_data_is_self_scoped_and_idempotent(
@@ -1596,9 +1646,7 @@ def test_transaction_currency_create_update_and_running_balance(
     client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registered = register(client, "transaction-fx@example.test", "FX User")
-    category = category_of_type(
-        db_session, registered["user"]["id"], TransactionType.OUTFLOW
-    )
+    category = category_of_type(db_session, registered["user"]["id"], TransactionType.OUTFLOW)
     first_date = date(2026, 8, 1)
     second_date = date(2026, 8, 2)
     service = StubExchangeRateService(
@@ -1698,19 +1746,28 @@ def test_account_summaries_use_frozen_base_amounts_for_foreign_transactions(
         transaction_date="2026-08-12",
     )
     assert foreign["base_amount_minor"] == 165_000
-    assert client.put(
-        "/api/v1/budgets/2026-08-01", json={"amount_minor": 200_000}, headers=headers
-    ).status_code == 200
-    assert client.put(
-        f"/api/v1/budgets/2026-08-01/categories/{outflow.id}",
-        json={"amount_minor": 180_000},
-        headers=headers,
-    ).status_code == 200
-    assert client.post(
-        "/api/v1/budget-settings/payday-schedules",
-        json={"first_day": 12, "second_day": 27, "effective_from": "2026-08-12"},
-        headers=headers,
-    ).status_code == 201
+    assert (
+        client.put(
+            "/api/v1/budgets/2026-08-01", json={"amount_minor": 200_000}, headers=headers
+        ).status_code
+        == 200
+    )
+    assert (
+        client.put(
+            f"/api/v1/budgets/2026-08-01/categories/{outflow.id}",
+            json={"amount_minor": 180_000},
+            headers=headers,
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/v1/budget-settings/payday-schedules",
+            json={"first_day": 12, "second_day": 27, "effective_from": "2026-08-12"},
+            headers=headers,
+        ).status_code
+        == 201
+    )
     allowance = client.put(
         "/api/v1/budgets/2026-08-01/allowances/2026-08-12",
         json={"amount_minor": 200_000},
@@ -1817,9 +1874,7 @@ def test_aed_account_identity_and_php_transaction_conversion(
     preferences.currency_code = "AED"
     db_session.commit()
     category = category_for(db_session, registered["user"]["id"])
-    service = StubExchangeRateService(
-        {("PHP", "AED", date(2026, 8, 1)): Decimal("0.0603646")}
-    )
+    service = StubExchangeRateService({("PHP", "AED", date(2026, 8, 1)): Decimal("0.0603646")})
     monkeypatch.setattr(
         "app.api.transactions.create_exchange_rate_service", lambda db, settings: service
     )

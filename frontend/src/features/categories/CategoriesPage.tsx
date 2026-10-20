@@ -249,7 +249,9 @@ export function CategoriesPage() {
             </select>
           </label>
           <div className="category-form-field">
-            <span>Icon <span className="hint">optional</span></span>
+            <span>
+              Icon <span className="hint">optional</span>
+            </span>
             <IconPicker
               color={form.color}
               onChange={(icon) => updateForm("icon", icon)}
@@ -267,7 +269,9 @@ export function CategoriesPage() {
             <label>
               Hex color
               <input
-                aria-invalid={normalizeCategoryColor(form.color) ? undefined : true}
+                aria-invalid={
+                  normalizeCategoryColor(form.color) ? undefined : true
+                }
                 maxLength={7}
                 onBlur={() => {
                   const normalized = normalizeCategoryColor(form.color);
@@ -335,12 +339,19 @@ export function CategoriesPage() {
                         />
                         <div className="category-name">
                           <strong className="category-name-heading">
-                            {category.icon && <CategoryIcon color={category.color} size={18} value={category.icon} />}
+                            {category.icon && (
+                              <CategoryIcon
+                                color={category.color}
+                                size={18}
+                                value={category.icon}
+                              />
+                            )}
                             {category.name}
                           </strong>
                           <span>
                             {category.icon
-                              ? (findCategoryIcon(category.icon)?.label ?? "Legacy icon")
+                              ? (findCategoryIcon(category.icon)?.label ??
+                                "Legacy icon")
                               : "No icon"}
                           </span>
                         </div>

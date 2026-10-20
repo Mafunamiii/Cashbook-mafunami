@@ -32,7 +32,9 @@ export function majorAmount(amountMinor: number, minorUnit = 2): string {
   const absolute = Math.abs(amountMinor);
   const scale = 10 ** minorUnit;
   const whole = Math.floor(absolute / scale);
-  const fraction = minorUnit ? String(absolute % scale).padStart(minorUnit, "0") : "";
+  const fraction = minorUnit
+    ? String(absolute % scale).padStart(minorUnit, "0")
+    : "";
   return `${negative ? "-" : ""}${whole}${minorUnit ? `.${fraction}` : ""}`;
 }
 
@@ -42,7 +44,8 @@ export function toMinorUnits(value: string, minorUnit = 2): number | null {
   if (!match || (match[2]?.length ?? 0) > minorUnit) return null;
   const whole = BigInt(match[1]);
   const fractional = (match[2] ?? "").padEnd(minorUnit, "0");
-  const amountMinor = whole * 10n ** BigInt(minorUnit) + BigInt(fractional || "0");
+  const amountMinor =
+    whole * 10n ** BigInt(minorUnit) + BigInt(fractional || "0");
   return amountMinor > 0n && amountMinor <= BigInt(Number.MAX_SAFE_INTEGER)
     ? Number(amountMinor)
     : null;

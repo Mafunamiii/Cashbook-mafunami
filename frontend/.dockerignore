@@ -5,3 +5,7 @@
 coverage
 dist
 node_modules
+node_modules.unusable
+**/*.test.*
+**/*.spec.*
+.npmrc

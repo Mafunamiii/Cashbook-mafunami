@@ -34,7 +34,8 @@ def test_base_currency_minor_units_are_aggregated_without_exponent_assumptions(
     base_amount_minor: int,
 ) -> None:
     summary = calculate_financial_summary(
-        [FinancialEntry(CashFlowType.OUTFLOW, base_amount_minor)], budget_minor=base_amount_minor * 2
+        [FinancialEntry(CashFlowType.OUTFLOW, base_amount_minor)],
+        budget_minor=base_amount_minor * 2,
     )
     assert summary.total_outflow_minor == base_amount_minor
     assert summary.budget_remaining_minor == base_amount_minor

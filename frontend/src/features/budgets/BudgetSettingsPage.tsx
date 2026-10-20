@@ -99,8 +99,12 @@ export function BudgetSettingsPage() {
   const [secondDay, setSecondDay] = useState("27");
   const [effectiveFrom, setEffectiveFrom] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
-  const [categoryDrafts, setCategoryDrafts] = useState<Record<string, CategoryDraft>>({});
-  const [categoryBaseline, setCategoryBaseline] = useState<Record<string, CategoryDraft>>({});
+  const [categoryDrafts, setCategoryDrafts] = useState<
+    Record<string, CategoryDraft>
+  >({});
+  const [categoryBaseline, setCategoryBaseline] = useState<
+    Record<string, CategoryDraft>
+  >({});
   const [savingCategories, setSavingCategories] = useState(false);
   const { currencies } = useCurrencies();
   const baseCurrency = currencyByCode(
@@ -126,17 +130,21 @@ export function BudgetSettingsPage() {
       if (settings.reporting_mode === "payday") setShowPaydaySettings(true);
       setCycle(currentCycle);
       const loadedDrafts = Object.fromEntries(
-          currentCycle.category_budgets.map((category) => [
-            category.category_id,
-            {
-              amount:
-                category.amount_minor === null
-                  ? ""
-                  : majorAmount(category.amount_minor, currencyByCode(currencies, currentCycle.base_currency_code).minor_unit),
-              reset: category.reset_each_payday,
-            },
-          ]),
-        );
+        currentCycle.category_budgets.map((category) => [
+          category.category_id,
+          {
+            amount:
+              category.amount_minor === null
+                ? ""
+                : majorAmount(
+                    category.amount_minor,
+                    currencyByCode(currencies, currentCycle.base_currency_code)
+                      .minor_unit,
+                  ),
+            reset: category.reset_each_payday,
+          },
+        ]),
+      );
       setCategoryDrafts(loadedDrafts);
       setCategoryBaseline(loadedDrafts);
       setAmount(
@@ -251,9 +259,14 @@ export function BudgetSettingsPage() {
   }
 
   async function saveCategoryBudget(categoryId: string, draft: CategoryDraft) {
-    const parsedAmount = draft.amount.trim() === "" ? null : budgetMinorUnits(draft.amount, baseCurrency.minor_unit);
+    const parsedAmount =
+      draft.amount.trim() === ""
+        ? null
+        : budgetMinorUnits(draft.amount, baseCurrency.minor_unit);
     if (parsedAmount === null && draft.amount.trim() !== "")
-      throw new Error(`Enter a valid ${baseCurrency.code} amount with up to ${baseCurrency.minor_unit} decimal places.`);
+      throw new Error(
+        `Enter a valid ${baseCurrency.code} amount with up to ${baseCurrency.minor_unit} decimal places.`,
+      );
     await request(`/budgets/${monthStart}/categories/${categoryId}`, {
       method: "PUT",
       body: JSON.stringify({
@@ -268,12 +281,21 @@ export function BudgetSettingsPage() {
     const changed = cycle.category_budgets.filter((item) => {
       const draft = categoryDrafts[item.category_id];
       const baseline = categoryBaseline[item.category_id];
-      return draft && baseline && (draft.amount !== baseline.amount || draft.reset !== baseline.reset);
+      return (
+        draft &&
+        baseline &&
+        (draft.amount !== baseline.amount || draft.reset !== baseline.reset)
+      );
     });
     for (const item of changed) {
       const draft = categoryDrafts[item.category_id];
-      if (draft.amount.trim() !== "" && budgetMinorUnits(draft.amount, baseCurrency.minor_unit) === null) {
-        setNotice(`Enter a valid ${baseCurrency.code} amount for ${item.category_name}.`);
+      if (
+        draft.amount.trim() !== "" &&
+        budgetMinorUnits(draft.amount, baseCurrency.minor_unit) === null
+      ) {
+        setNotice(
+          `Enter a valid ${baseCurrency.code} amount for ${item.category_name}.`,
+        );
         return;
       }
     }
@@ -283,16 +305,25 @@ export function BudgetSettingsPage() {
       for (const item of changed) {
         const draft = categoryDrafts[item.category_id];
         await saveCategoryBudget(item.category_id, draft);
-        setCategoryBaseline((baseline) => ({ ...baseline, [item.category_id]: draft }));
+        setCategoryBaseline((baseline) => ({
+          ...baseline,
+          [item.category_id]: draft,
+        }));
         savedCount += 1;
       }
-      setNotice(changed.length ? "Category allocations saved." : "No category allocation changes to save.");
+      setNotice(
+        changed.length
+          ? "Category allocations saved."
+          : "No category allocation changes to save.",
+      );
       if (changed.length) await load();
     } catch (error) {
       setNotice(
         savedCount
           ? `${savedCount} category allocation${savedCount === 1 ? "" : "s"} saved; the remaining changes were not saved. ${error instanceof Error ? error.message : "Unable to save category allocations."}`
-          : error instanceof Error ? error.message : "Unable to save category allocations.",
+          : error instanceof Error
+            ? error.message
+            : "Unable to save category allocations.",
       );
     } finally {
       setSavingCategories(false);
@@ -360,10 +391,28 @@ export function BudgetSettingsPage() {
             <h2>Category allocations</h2>
           </div>
           <div className="budget-actions">
-            <button className="text-button" type="button" onClick={() => setCategoryDrafts((drafts) => Object.fromEntries(Object.keys(drafts).map((id) => [id, { ...drafts[id], amount: "" }])))}>
+            <button
+              className="text-button"
+              type="button"
+              onClick={() =>
+                setCategoryDrafts((drafts) =>
+                  Object.fromEntries(
+                    Object.keys(drafts).map((id) => [
+                      id,
+                      { ...drafts[id], amount: "" },
+                    ]),
+                  ),
+                )
+              }
+            >
               Clear all
             </button>
-            <button className="button" disabled={savingCategories} type="button" onClick={() => void saveAllCategoryBudgets()}>
+            <button
+              className="button"
+              disabled={savingCategories}
+              type="button"
+              onClick={() => void saveAllCategoryBudgets()}
+            >
               Save all
             </button>
           </div>
@@ -373,44 +422,67 @@ export function BudgetSettingsPage() {
             preserve the prior cycle and start the next allocation at zero.
           </p>
           {cycle?.category_budgets.map((category) => {
-            const draft = categoryDrafts[category.category_id] ?? { amount: "", reset: false };
-            return <div
-              className="allocation-row"
-              key={`${category.category_id}-${category.amount_minor}-${category.reset_each_payday}`}
-            >
-              <span>
-                <i
-                  className="budget-swatch"
-                  style={{ backgroundColor: category.category_color }}
-                />
-                {category.category_name}
-                <small className={category.is_overspent ? "budget-danger" : ""}>
-                  Used {money(category.used_minor)} · Remaining{" "}
-                  {money(category.remaining_minor)}
-                </small>
-              </span>
-              <input
-                aria-label={`${category.category_name} budget`}
-                value={draft.amount}
-                onChange={(event) => setCategoryDrafts((items) => ({ ...items, [category.category_id]: { ...draft, amount: event.target.value } }))}
-                inputMode="decimal"
-                name="amount"
-                pattern={
-                  baseCurrency.minor_unit ? "[0-9]+([.][0-9]+)?" : "[0-9]+"
-                }
-                required
-              />
-              <label className="allocation-reset-toggle">
+            const draft = categoryDrafts[category.category_id] ?? {
+              amount: "",
+              reset: false,
+            };
+            return (
+              <div
+                className="allocation-row"
+                key={`${category.category_id}-${category.amount_minor}-${category.reset_each_payday}`}
+              >
+                <span>
+                  <i
+                    className="budget-swatch"
+                    style={{ backgroundColor: category.category_color }}
+                  />
+                  {category.category_name}
+                  <small
+                    className={category.is_overspent ? "budget-danger" : ""}
+                  >
+                    Used {money(category.used_minor)} · Remaining{" "}
+                    {money(category.remaining_minor)}
+                  </small>
+                </span>
                 <input
-                  checked={draft.reset}
-                  onChange={(event) => setCategoryDrafts((items) => ({ ...items, [category.category_id]: { ...draft, reset: event.target.checked } }))}
-                  disabled={!paydaySchedule}
-                  name="reset"
-                  type="checkbox"
+                  aria-label={`${category.category_name} budget`}
+                  value={draft.amount}
+                  onChange={(event) =>
+                    setCategoryDrafts((items) => ({
+                      ...items,
+                      [category.category_id]: {
+                        ...draft,
+                        amount: event.target.value,
+                      },
+                    }))
+                  }
+                  inputMode="decimal"
+                  name="amount"
+                  pattern={
+                    baseCurrency.minor_unit ? "[0-9]+([.][0-9]+)?" : "[0-9]+"
+                  }
+                  required
                 />
-                Reset each payday
-              </label>
-            </div>;
+                <label className="allocation-reset-toggle">
+                  <input
+                    checked={draft.reset}
+                    onChange={(event) =>
+                      setCategoryDrafts((items) => ({
+                        ...items,
+                        [category.category_id]: {
+                          ...draft,
+                          reset: event.target.checked,
+                        },
+                      }))
+                    }
+                    disabled={!paydaySchedule}
+                    name="reset"
+                    type="checkbox"
+                  />
+                  Reset each payday
+                </label>
+              </div>
+            );
           })}
         </section>
 
