@@ -96,7 +96,16 @@ jobs:
         working-directory: backend
         run: python -m pip install -e ".[dev]"
       - name: Verify isolated test database name
-        run: python -c 'from sqlalchemy.engine import make_url; name = make_url("${TEST_DATABASE_URL}").database or ""; assert name.endswith("_test"), name'
+        run: |
+          python - <<'PY'
+          import os
+
+          from sqlalchemy.engine import make_url
+
+          database_name = make_url(os.environ["TEST_DATABASE_URL"]).database or ""
+          if not database_name.lower().endswith("_test"):
+              raise SystemExit(f"Refusing non-test database: {database_name!r}")
+          PY
       - name: Run PostgreSQL integration tests
         working-directory: backend
         run: pytest tests/integration
@@ -132,7 +141,16 @@ jobs:
         working-directory: backend
         run: python -m pip install -e ".[dev]"
       - name: Verify isolated migration database name
-        run: python -c 'from sqlalchemy.engine import make_url; name = make_url("${DATABASE_URL}").database or ""; assert name.endswith("_test"), name'
+        run: |
+          python - <<'PY'
+          import os
+
+          from sqlalchemy.engine import make_url
+
+          database_name = make_url(os.environ["DATABASE_URL"]).database or ""
+          if not database_name.lower().endswith("_test"):
+              raise SystemExit(f"Refusing non-test database: {database_name!r}")
+          PY
       - name: Apply Alembic migrations to fresh database
         working-directory: backend
         run: alembic upgrade head

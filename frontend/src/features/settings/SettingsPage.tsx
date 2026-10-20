@@ -152,7 +152,11 @@ export function SettingsPage({
           {error}
         </p>
       )}
-      {currenciesError && <p className="form-error" role="alert">{currenciesError}</p>}
+      {currenciesError && (
+        <p className="form-error" role="alert">
+          {currenciesError}
+        </p>
+      )}
       {notice && (
         <p className="notice" role="status">
           {notice}
@@ -212,9 +216,9 @@ export function SettingsPage({
                   setCurrencyCode(event.target.value as CurrencyCode)
                 }
               >
-                {!currencies.some((currency) => currency.code === currencyCode) && (
-                  <option value={currencyCode}>{currencyCode}</option>
-                )}
+                {!currencies.some(
+                  (currency) => currency.code === currencyCode,
+                ) && <option value={currencyCode}>{currencyCode}</option>}
                 {currencies.map((currency) => (
                   <option key={currency.code} value={currency.code}>
                     {currency.code} — {currency.name}

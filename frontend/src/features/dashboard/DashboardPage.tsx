@@ -662,11 +662,14 @@ export function DashboardPage({
                         )}
                         {item.currency_code !== item.base_currency_code ? (
                           <small>
-                            ≈ {formatCurrency(
+                            ≈{" "}
+                            {formatCurrency(
                               item.base_amount_minor,
                               item.base_currency_code,
-                              currencyByCode(currencies, item.base_currency_code)
-                                .minor_unit,
+                              currencyByCode(
+                                currencies,
+                                item.base_currency_code,
+                              ).minor_unit,
                             )}
                           </small>
                         ) : null}

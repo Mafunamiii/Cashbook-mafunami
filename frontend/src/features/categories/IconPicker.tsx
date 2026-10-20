@@ -20,7 +20,9 @@ export function CategoryIcon({ value, color, size = 22 }: CategoryIconProps) {
     return value ? <span className="legacy-category-icon">{value}</span> : null;
   }
   const Icon = definition.icon;
-  return <Icon aria-hidden="true" color={color} size={size} strokeWidth={1.8} />;
+  return (
+    <Icon aria-hidden="true" color={color} size={size} strokeWidth={1.8} />
+  );
 }
 
 type IconPickerProps = {
@@ -34,7 +36,10 @@ export function IconPicker({ value, color, onChange }: IconPickerProps) {
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState<IconGroup | undefined>();
   const selected = findCategoryIcon(value);
-  const results = useMemo(() => searchCategoryIcons(query, group), [group, query]);
+  const results = useMemo(
+    () => searchCategoryIcons(query, group),
+    [group, query],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -51,8 +56,12 @@ export function IconPicker({ value, color, onChange }: IconPickerProps) {
     setQuery("");
   }
 
-  function handleGridKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    const direction = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+  function handleGridKeyDown(
+    event: KeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) {
+    const direction =
+      event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
     if (!direction) return;
     const next = document.querySelector<HTMLButtonElement>(
       `[data-icon-index="${index + direction}"]`,
@@ -67,7 +76,9 @@ export function IconPicker({ value, color, onChange }: IconPickerProps) {
     <div className="icon-picker">
       <button
         aria-haspopup="dialog"
-        aria-label={selected ? `Selected icon: ${selected.label}` : "Choose category icon"}
+        aria-label={
+          selected ? `Selected icon: ${selected.label}` : "Choose category icon"
+        }
         className="icon-picker-trigger"
         onClick={() => setOpen(true)}
         type="button"
@@ -76,12 +87,18 @@ export function IconPicker({ value, color, onChange }: IconPickerProps) {
           <CategoryIcon value={value} color={color} />
         </span>
         <span>{selected?.label ?? (value ? "Legacy icon" : "No icon")}</span>
-        <span className="icon-picker-caret" aria-hidden="true">⌄</span>
+        <span className="icon-picker-caret" aria-hidden="true">
+          ⌄
+        </span>
       </button>
       {open && (
-        <div className="icon-picker-overlay" role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setOpen(false);
-        }}>
+        <div
+          className="icon-picker-overlay"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setOpen(false);
+          }}
+        >
           <section
             aria-label="Choose category icon"
             aria-modal="true"
@@ -94,7 +111,11 @@ export function IconPicker({ value, color, onChange }: IconPickerProps) {
                 <p className="eyebrow">Category icon</p>
                 <h2>Choose an icon</h2>
               </div>
-              <button className="text-button" onClick={() => setOpen(false)} type="button">
+              <button
+                className="text-button"
+                onClick={() => setOpen(false)}
+                type="button"
+              >
                 Close
               </button>
             </header>
@@ -106,7 +127,11 @@ export function IconPicker({ value, color, onChange }: IconPickerProps) {
               type="search"
               value={query}
             />
-            <div aria-label="Icon groups" className="icon-picker-groups" role="group">
+            <div
+              aria-label="Icon groups"
+              className="icon-picker-groups"
+              role="group"
+            >
               <button
                 aria-pressed={!group}
                 className={`icon-group-filter ${!group ? "active" : ""}`}
@@ -127,7 +152,11 @@ export function IconPicker({ value, color, onChange }: IconPickerProps) {
                 </button>
               ))}
             </div>
-            <div className="icon-picker-grid" role="listbox" aria-label="Available icons">
+            <div
+              className="icon-picker-grid"
+              role="listbox"
+              aria-label="Available icons"
+            >
               <button
                 aria-label="No icon"
                 aria-selected={!value}
@@ -161,7 +190,9 @@ export function IconPicker({ value, color, onChange }: IconPickerProps) {
                 );
               })}
             </div>
-            {results.length === 0 && <p className="empty-state">No matching icons.</p>}
+            {results.length === 0 && (
+              <p className="empty-state">No matching icons.</p>
+            )}
           </section>
         </div>
       )}

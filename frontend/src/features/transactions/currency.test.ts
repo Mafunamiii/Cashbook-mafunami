@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { initialForm } from "./AddTransaction";
-import { currencyByCode, formatCurrency, minorUnitsToDisplay } from "./currency";
+import {
+  currencyByCode,
+  formatCurrency,
+  minorUnitsToDisplay,
+} from "./currency";
 
 describe("transaction currencies", () => {
   it("defaults a new transaction to the supplied account currency", () => {
