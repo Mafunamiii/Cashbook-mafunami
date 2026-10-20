@@ -1,0 +1,299 @@
+name: Release images
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Validate release and publish GHCR images
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Validate annotated SemVer tag against current main
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="$GITHUB_REF_NAME"
+          if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Unsupported release tag: $tag (expected vMAJOR.MINOR.PATCH without prerelease/build metadata)" >&2
+            exit 1
+          fi
+
+          if [[ "$(git cat-file -t "refs/tags/$tag")" != "tag" ]]; then
+            echo "Release tags must be annotated Git tags." >&2
+            exit 1
+          fi
+
+          tag_commit="$(git rev-parse "refs/tags/$tag^{commit}")"
+          git fetch --no-tags origin main
+          main_commit="$(git rev-parse FETCH_HEAD)"
+          checkout_commit="$(git rev-parse HEAD)"
+          if [[ "$tag_commit" != "$main_commit" || "$checkout_commit" != "$tag_commit" ]]; then
+            echo "The release tag, checked-out commit, and current origin/main HEAD must match." >&2
+            echo "tag=$tag_commit main=$main_commit checkout=$checkout_commit" >&2
+            exit 1
+          fi
+
+          version="$tag"
+          created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
+          echo "created=$created" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Backend image metadata
+        id: backend-meta
+        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
+        with:
+          images: ghcr.io/mafunamiii/namicash-backend
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ steps.validate.outputs.version }}
+            type=raw,value=sha-${{ steps.validate.outputs.commit }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.validate.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.validate.outputs.commit }}
+            org.opencontainers.image.created=${{ steps.validate.outputs.created }}
+
+      - name: Build backend image for local smoke test
+        id: backend-build
+        uses: docker/build-push-action@5cd11c3a4ced054e52742c5fd54dca954e0edd85 # v6.7.0
+        with:
+          context: ./backend
+          platforms: linux/amd64
+          load: true
+          tags: ${{ steps.backend-meta.outputs.tags }}
+          labels: ${{ steps.backend-meta.outputs.labels }}
+
+      - name: Smoke test backend image before publishing
+        env:
+          IMAGE: ghcr.io/mafunamiii/namicash-backend:${{ steps.validate.outputs.version }}
+          SHA_IMAGE: ghcr.io/mafunamiii/namicash-backend:sha-${{ steps.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect --format '{{.Architecture}}' "$IMAGE")" = amd64
+          docker image inspect "$SHA_IMAGE" >/dev/null
+          docker run --rm --platform linux/amd64 --entrypoint sh "$IMAGE" -ec \
+            'python -c "import app.main" && test -f /app/alembic.ini && test -f /app/alembic/env.py && test -f /app/scripts/validate_environment.py && test -f /app/scripts/bootstrap_admin.py'
+
+      - name: Frontend image metadata
+        id: frontend-meta
+        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
+        with:
+          images: ghcr.io/mafunamiii/namicash-frontend
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ steps.validate.outputs.version }}
+            type=raw,value=sha-${{ steps.validate.outputs.commit }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.validate.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.validate.outputs.commit }}
+            org.opencontainers.image.created=${{ steps.validate.outputs.created }}
+
+      - name: Build frontend production image for local smoke test
+        id: frontend-build
+        uses: docker/build-push-action@5cd11c3a4ced054e52742c5fd54dca954e0edd85 # v6.7.0
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          target: production
+          platforms: linux/amd64
+          load: true
+          tags: ${{ steps.frontend-meta.outputs.tags }}
+          labels: ${{ steps.frontend-meta.outputs.labels }}
+
+      - name: Create isolated Nginx smoke-test network
+        id: smoke-network
+        env:
+          NETWORK: namicash-release-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+        run: docker network create "$NETWORK"
+
+      - name: Smoke test frontend production image before publishing
+        env:
+          NETWORK: namicash-release-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          BACKEND_IMAGE: ghcr.io/mafunamiii/namicash-backend:${{ steps.validate.outputs.version }}
+          IMAGE: ghcr.io/mafunamiii/namicash-frontend:${{ steps.validate.outputs.version }}
+          SHA_IMAGE: ghcr.io/mafunamiii/namicash-frontend:sha-${{ steps.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          docker run -d --name namicash-release-smoke-backend --network "$NETWORK" \
+            --network-alias backend --entrypoint sh "$BACKEND_IMAGE" -c 'sleep 300'
+          test "$(docker image inspect --format '{{.Architecture}}' "$IMAGE")" = amd64
+          docker image inspect "$SHA_IMAGE" >/dev/null
+          docker run --rm --network "$NETWORK" --platform linux/amd64 --entrypoint sh "$IMAGE" -ec \
+            'test -s /usr/share/nginx/html/index.html && find /usr/share/nginx/html/assets -type f -print -quit | grep -q . && test -s /etc/nginx/conf.d/default.conf && nginx -t'
+
+      - name: Recheck main HEAD immediately before publishing
+        env:
+          COMMIT: ${{ steps.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          main_commit="$(git rev-parse FETCH_HEAD)"
+          if [[ "$main_commit" != "$COMMIT" || "$(git rev-parse HEAD)" != "$COMMIT" ]]; then
+            echo "main moved after release validation; refusing to publish." >&2
+            exit 1
+          fi
+
+      - name: Log in to GHCR with GITHUB_TOKEN
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish both validated images
+        id: publish-images
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+          COMMIT: ${{ steps.validate.outputs.commit }}
+          BACKEND_IMAGE: ghcr.io/mafunamiii/namicash-backend
+          FRONTEND_IMAGE: ghcr.io/mafunamiii/namicash-frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          push_and_capture_digest() {
+            local image="$1"
+            local version_ref="$image:$VERSION"
+            local sha_ref="$image:sha-$COMMIT"
+            local log_file version_digest sha_digest
+
+            log_file="$(mktemp)"
+            if ! docker push "$version_ref" >"$log_file" 2>&1; then
+              cat "$log_file" >&2
+              rm -f "$log_file"
+              return 1
+            fi
+            cat "$log_file" >&2
+            version_digest="$(sed -nE 's/.*digest: (sha256:[0-9a-f]{64}).*/\1/p' "$log_file" | tail -n 1)"
+            if [[ ! "$version_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Could not capture digest for $version_ref" >&2
+              rm -f "$log_file"
+              return 1
+            fi
+
+            if ! docker push "$sha_ref" >"$log_file" 2>&1; then
+              cat "$log_file" >&2
+              rm -f "$log_file"
+              return 1
+            fi
+            cat "$log_file" >&2
+            sha_digest="$(sed -nE 's/.*digest: (sha256:[0-9a-f]{64}).*/\1/p' "$log_file" | tail -n 1)"
+            rm -f "$log_file"
+            if [[ "$sha_digest" != "$version_digest" ]]; then
+              echo "Version and SHA tags for $image do not resolve to the same digest." >&2
+              return 1
+            fi
+            printf '%s' "$version_digest"
+          }
+
+          backend_digest="$(push_and_capture_digest "$BACKEND_IMAGE")"
+          frontend_digest="$(push_and_capture_digest "$FRONTEND_IMAGE")"
+          echo "backend_digest=$backend_digest" >> "$GITHUB_OUTPUT"
+          echo "frontend_digest=$frontend_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Verify published images by digest
+        env:
+          NETWORK: namicash-release-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          BACKEND_IMAGE: ghcr.io/mafunamiii/namicash-backend
+          BACKEND_DIGEST: ${{ steps.publish-images.outputs.backend_digest }}
+          FRONTEND_IMAGE: ghcr.io/mafunamiii/namicash-frontend
+          FRONTEND_DIGEST: ${{ steps.publish-images.outputs.frontend_digest }}
+          VERSION: ${{ steps.validate.outputs.version }}
+          COMMIT: ${{ steps.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "$BACKEND_IMAGE@$BACKEND_DIGEST"
+          docker pull --platform linux/amd64 "$FRONTEND_IMAGE@$FRONTEND_DIGEST"
+          test "$(docker image inspect --format '{{.Architecture}}' "$BACKEND_IMAGE@$BACKEND_DIGEST")" = amd64
+          test "$(docker image inspect --format '{{.Architecture}}' "$FRONTEND_IMAGE@$FRONTEND_DIGEST")" = amd64
+          for image in "$BACKEND_IMAGE@$BACKEND_DIGEST" "$FRONTEND_IMAGE@$FRONTEND_DIGEST"; do
+            test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image")" = "$VERSION"
+            test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$COMMIT"
+          done
+          docker run --rm --platform linux/amd64 --entrypoint sh "$BACKEND_IMAGE@$BACKEND_DIGEST" -ec \
+            'python -c "import app.main" && test -f /app/alembic.ini && test -f /app/alembic/env.py && test -f /app/scripts/validate_environment.py && test -f /app/scripts/bootstrap_admin.py'
+          docker run --rm --network "$NETWORK" --platform linux/amd64 --entrypoint sh "$FRONTEND_IMAGE@$FRONTEND_DIGEST" -ec \
+            'test -s /usr/share/nginx/html/index.html && find /usr/share/nginx/html/assets -type f -print -quit | grep -q . && test -s /etc/nginx/conf.d/default.conf && nginx -t'
+
+      - name: Clean up isolated Nginx smoke-test network
+        if: always()
+        env:
+          NETWORK: namicash-release-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -u
+          cleanup_failed=0
+          if docker network inspect "$NETWORK" >/dev/null 2>&1; then
+            if docker rm -f namicash-release-smoke-backend; then
+              :
+            elif docker ps -aq --filter name='^namicash-release-smoke-backend$' | grep -q .; then
+              cleanup_failed=1
+            fi
+            docker network rm "$NETWORK" || cleanup_failed=1
+          fi
+          exit "$cleanup_failed"
+
+      - name: Create release manifest
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+          COMMIT: ${{ steps.validate.outputs.commit }}
+          BACKEND_DIGEST: ${{ steps.publish-images.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ steps.publish-images.outputs.frontend_digest }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CREATED: ${{ steps.validate.outputs.created }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = {
+              "version": os.environ["VERSION"],
+              "source_commit": os.environ["COMMIT"],
+              "images": {
+                  "backend": {
+                      "name": "ghcr.io/mafunamiii/namicash-backend",
+                      "digest": os.environ["BACKEND_DIGEST"],
+                      "architecture": "linux/amd64",
+                  },
+                  "frontend": {
+                      "name": "ghcr.io/mafunamiii/namicash-frontend",
+                      "digest": os.environ["FRONTEND_DIGEST"],
+                      "architecture": "linux/amd64",
+                  },
+              },
+              "workflow_run": os.environ["RUN_URL"],
+              "build_timestamp": os.environ["CREATED"],
+          }
+          Path("release-manifest.json").write_text(
+              json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+          cat release-manifest.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-manifest-${{ steps.validate.outputs.version }}
+          path: release-manifest.json
+          if-no-files-found: error
+          retention-days: 90
