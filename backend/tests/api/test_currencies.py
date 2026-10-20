@@ -20,7 +20,15 @@ def isolate_currency_catalog_cache(monkeypatch):
 def test_currency_catalog_uses_frankfurter_when_available(monkeypatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v2/currencies"
-        return httpx.Response(200, json=[{"iso_code": "JPY"}, {"iso_code": "PHP"}])
+        return httpx.Response(
+            200,
+            json=[
+                {"iso_code": "JPY"},
+                {"iso_code": "PHP"},
+                {"iso_code": "BHD"},
+                {"iso_code": "CLF"},
+            ],
+        )
 
     monkeypatch.setattr(
         "app.api.currencies.FrankfurterV2Client",
@@ -31,7 +39,11 @@ def test_currency_catalog_uses_frankfurter_when_available(monkeypatch) -> None:
 
     result = list_currencies(None, None, _settings())
 
-    assert [currency.code for currency in result] == ["JPY", "PHP"]
+    assert [(currency.code, currency.minor_unit) for currency in result] == [
+        ("BHD", 3),
+        ("JPY", 0),
+        ("PHP", 2),
+    ]
 
 
 def test_currency_catalog_falls_back_locally_when_frankfurter_is_unavailable(monkeypatch) -> None:
@@ -54,5 +66,6 @@ def test_currency_catalog_falls_back_locally_when_frankfurter_is_unavailable(mon
     assert len(requests) == 1
     assert "PHP" in currencies
     assert "AED" in currencies
+    assert "CLF" not in currencies
     assert currencies["PHP"].name
     assert currencies["AED"].name

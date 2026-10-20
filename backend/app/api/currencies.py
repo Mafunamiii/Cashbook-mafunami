@@ -31,5 +31,7 @@ def list_currencies(
             name, minor_unit = currency_metadata(code)
         except ValueError:
             continue
+        if not 0 <= minor_unit <= 3:
+            continue
         result.append(CurrencyResponse(code=code, name=name, minor_unit=minor_unit))
     return sorted(result, key=lambda item: item.code)
