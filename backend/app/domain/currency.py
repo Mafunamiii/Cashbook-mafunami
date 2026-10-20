@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, ROUND_HALF_EVEN
+from decimal import ROUND_HALF_EVEN, Decimal
 
 from iso4217 import Currency
 
@@ -58,7 +58,9 @@ class IdentityConversion:
     exchange_rate_source: str
 
 
-def identity_conversion(amount_minor: int, currency_code: str, rate_date: date) -> IdentityConversion:
+def identity_conversion(
+    amount_minor: int, currency_code: str, rate_date: date
+) -> IdentityConversion:
     """Create immutable metadata for an amount already in its base currency."""
     normalized_currency = normalize_currency_code(currency_code)
     return IdentityConversion(
@@ -84,7 +86,11 @@ def convert_amount_minor(
     """
     if isinstance(amount_minor, bool) or not isinstance(amount_minor, int) or amount_minor < 0:
         raise ValueError("amount_minor must be a non-negative integer.")
-    if not isinstance(exchange_rate, Decimal) or not exchange_rate.is_finite() or exchange_rate <= 0:
+    if (
+        not isinstance(exchange_rate, Decimal)
+        or not exchange_rate.is_finite()
+        or exchange_rate <= 0
+    ):
         raise ValueError("exchange_rate must be a positive finite Decimal.")
 
     source_exponent = currency_minor_unit_exponent(source_currency_code)

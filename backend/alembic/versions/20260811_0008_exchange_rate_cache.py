@@ -27,13 +27,35 @@ def upgrade() -> None:
         sa.Column("effective_date", sa.Date(), nullable=False),
         sa.Column("rate", sa.Numeric(precision=20, scale=10), nullable=False),
         sa.Column("source", sa.String(length=32), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.CheckConstraint("rate > 0", name="ck_exchange_rate_cache_positive_rate"),
-        sa.CheckConstraint("source_currency_code IN ('PHP', 'AED')", name="ck_exchange_rate_cache_supported_source_currency"),
-        sa.CheckConstraint("target_currency_code IN ('PHP', 'AED')", name="ck_exchange_rate_cache_supported_target_currency"),
+        sa.CheckConstraint(
+            "source_currency_code IN ('PHP', 'AED')",
+            name="ck_exchange_rate_cache_supported_source_currency",
+        ),
+        sa.CheckConstraint(
+            "target_currency_code IN ('PHP', 'AED')",
+            name="ck_exchange_rate_cache_supported_target_currency",
+        ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("source", "source_currency_code", "target_currency_code", "requested_date", name="uq_exchange_rate_cache_source_pair_requested_date"),
+        sa.UniqueConstraint(
+            "source",
+            "source_currency_code",
+            "target_currency_code",
+            "requested_date",
+            name="uq_exchange_rate_cache_source_pair_requested_date",
+        ),
     )
 
 

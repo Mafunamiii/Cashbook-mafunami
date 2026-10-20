@@ -37,10 +37,12 @@ from app.core.security import (
 from app.db.models import (
     AuditEvent,
     Category,
-    Session as AuthSession,
     TransactionType,
     User,
     UserPreferences,
+)
+from app.db.models import (
+    Session as AuthSession,
 )
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])

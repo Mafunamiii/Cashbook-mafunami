@@ -40,8 +40,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_payday_schedules_user_effective", table_name="payday_schedules")
-    op.drop_constraint(
-        "uq_payday_schedules_user_effective", "payday_schedules", type_="unique"
-    )
+    op.drop_constraint("uq_payday_schedules_user_effective", "payday_schedules", type_="unique")
     op.create_unique_constraint("uq_payday_schedules_user", "payday_schedules", ["user_id"])
     op.drop_column("payday_schedules", "effective_from")
