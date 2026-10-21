@@ -27,9 +27,15 @@ non-SemVer tag does not publish images.
 ## Build and verify
 
 `.github/workflows/release.yml` runs only for pushed tags beginning with `v`.
-It verifies strict SemVer syntax, requires an annotated Git tag, fetches current
-`origin/main`, and requires the tag commit, checked-out commit, and main HEAD to
-match. After both images build and pass local smoke tests, it repeats the main
+It verifies strict SemVer syntax, explicitly fetches the remote tag into a
+separate local ref, and inspects that fetched object ID to require an annotated
+Git tag. This avoids relying on checkout's local ref: its tag checkout path can
+replace an annotated tag ref with the target commit after comparing the tag
+object with the commit SHA ([actions/checkout issue #882](https://github.com/actions/checkout/issues/882)).
+It peels the fetched remote tag and requires its commit, checked-out commit, and
+current `origin/main` HEAD to match. A local regression script tests annotated
+and lightweight remote tags on a temporary repository. After both
+images build and pass local smoke tests, it repeats the main
 HEAD check before authenticating and publishing. It uses GitHub-hosted Ubuntu
 runners and `GITHUB_TOKEN` with package write permission. It builds and publishes
 `linux/amd64` backend and frontend production images to GHCR. No deployment,

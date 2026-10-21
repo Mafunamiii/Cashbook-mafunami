@@ -21,6 +21,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Test remote annotated-tag validation
+        run: bash .github/scripts/test-release-tag-validation.sh
+
       - name: Validate annotated SemVer tag against current main
         id: validate
         shell: bash
@@ -33,12 +36,13 @@ jobs:
             exit 1
           fi
 
-          if [[ "$(git cat-file -t "refs/tags/$tag")" != "tag" ]]; then
-            echo "Release tags must be annotated Git tags." >&2
+          # Do not infer the remote tag object's type from checkout's local tag ref.
+          source .github/scripts/release-tag-validation.sh
+          if ! tag_commit="$(fetch_annotated_release_tag_commit "$tag")"; then
+            echo "Could not validate the annotated remote release tag." >&2
             exit 1
           fi
 
-          tag_commit="$(git rev-parse "refs/tags/$tag^{commit}")"
           git fetch --no-tags origin main
           main_commit="$(git rev-parse FETCH_HEAD)"
           checkout_commit="$(git rev-parse HEAD)"
