@@ -1,0 +1,20 @@
+[Unit]
+Description=NamiCash PostgreSQL backup
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=jahn
+Group=jahn
+SupplementaryGroups=docker
+UMask=0077
+Environment=HOME=/home/jahn
+Environment=BACKUP_DIR=/home/jahn/backups/namicash/postgres
+ExecStart=/home/jahn/Cashbook-mafunami/scripts/backup-postgres.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/jahn/backups/namicash/postgres
+

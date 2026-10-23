@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily NamiCash PostgreSQL backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=20m
+Unit=namicash-backup.service
+
+[Install]
+WantedBy=timers.target
+
