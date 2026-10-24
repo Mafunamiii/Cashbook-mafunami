@@ -89,18 +89,10 @@ def cleanup(controller, report_dir):
         need(labels.get("com.docker.compose.project") == project and
              labels.get("com.docker.compose.service") == service,
              f"refusing to remove unexpected container: {container_name}")
-        log = subprocess.run(("docker", "logs", container_name), capture_output=True, text=True)
-        output = (log.stdout + log.stderr)[-200000:]
-        if controller.env_file.is_file():
-            for line in controller.env_file.read_text().splitlines():
-                if line.startswith(("POSTGRES_PASSWORD=", "DATABASE_URL=")) and "=" in line:
-                    secret = line.split("=", 1)[1]
-                    if secret:
-                        output = output.replace(secret, "[REDACTED]")
-            password = re.search(r"^POSTGRES_PASSWORD=(.+)$", controller.env_file.read_text(), re.MULTILINE)
-            if password:
-                output = output.replace(password[1], "[REDACTED]")
-        (report_dir / f"{container_name}.log").write_text(output)
+        # Arbitrary application/Docker output may include unknown tokens or
+        # environment values. Keep only the checked container identity.
+        (report_dir / f"{container_name}.log").write_text(
+            f"docker logs for {container_name}: output withheld to protect credentials\n")
         try:
             run("docker", "rm", "-f", container_name)
         except bg.Error as exc:
@@ -145,6 +137,7 @@ def write_report(report, directory):
     (directory / "staging-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     lines = ["# NamiCash staging validation", "", f"Overall: **{report['overall']}**",
              f"Mode: {report['mode']}", f"Run: {report['run_id']}",
+             f"Workflow: {report.get('workflow_run', 'unverified')}",
              f"Controller commit: {report['controller_commit']}",
              f"Completed: {report['completed_at']}", "",
              "| Check | Result |", "| --- | --- |"]
@@ -152,16 +145,25 @@ def write_report(report, directory):
     lines += ["", "## Releases", ""]
     for color, data in report["releases"].items():
         lines += [f"- {color}: {data['version']} at {data['source_commit']}",
+                  f"  - selected run: {report.get('release_runs', {}).get(color, 'unverified')}",
+                  f"  - release manifest: {data.get('workflow_run', 'unverified')}",
                   f"  - backend: {data['images']['backend']['digest']}",
                   f"  - frontend: {data['images']['frontend']['digest']}"]
+    lines += ["", f"Promotion: {report['promotion']}", f"Rollback: {report['rollback']}",
+              f"Schema compatibility: {report['schema_compatibility']}",
+              f"Cleanup: {report['tests'].get('scoped cleanup', 'NOT_RUN')}"]
     if report.get("error"):
         lines += ["", f"Failure: {report['error']}"]
+    if report.get("cleanup_error"):
+        lines += ["", f"Cleanup failure: {report['cleanup_error']}"]
     (directory / "staging-report.md").write_text("\n".join(lines) + "\n")
 
 
 def execute(args):
     check_ref(args.trusted_ref)
     need(re.fullmatch(r"[0-9]+-[0-9]+", args.run_id), "invalid run identifier")
+    need(re.fullmatch(r"[0-9]+", args.blue_release_run) and
+         re.fullmatch(r"[0-9]+", args.candidate_release_run), "invalid release run identifier")
     blue, blue_refs = legacy.manifest(args.blue_manifest)
     green, green_refs = legacy.manifest(args.candidate_manifest)
     if args.mode == "infrastructure":
@@ -191,6 +193,8 @@ def execute(args):
     need(not report_dir.is_relative_to(controller.state_dir.resolve()),
          "report directory must survive staging cleanup")
     report = {"schema": 1, "mode": args.mode, "run_id": args.run_id,
+              "workflow_run": f"https://github.com/Mafunamiii/Cashbook-mafunami/actions/runs/{args.run_id.split('-')[0]}/attempts/{args.run_id.split('-')[1]}",
+              "release_runs": {"blue": args.blue_release_run, "green": args.candidate_release_run},
               "controller_commit": run("git", "rev-parse", "HEAD"),
               "releases": {"blue": blue, "green": green}, "tests": {},
               "promotion": "NOT_RUN", "rollback": "NOT_RUN", "schema_compatibility": "NOT_RUN"}
@@ -223,7 +227,8 @@ def execute(args):
         command("prepare", args.candidate_manifest)
         controller.slot_check("blue", controller.load()["slots"]["blue"])
         controller.route_probe("blue")
-        report["schema_compatibility"] = {"result": "PASS", "revision": controller.schema_revision(),
+        report["schema_compatibility"] = {"result": "PASS", "scope": "same-release infrastructure" if args.mode == "infrastructure" else "candidate migration with Blue health check",
+                                          "cross_version_tested": args.mode == "release", "revision": controller.schema_revision(),
                                           "blue_head": controller.image_schema_head(blue_refs["backend"]),
                                           "green_head": controller.image_schema_head(green_refs["backend"])}
         report["tests"][step] = "PASS"
@@ -268,13 +273,29 @@ def main():
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--report-dir", required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--blue-release-run", required=True)
+    parser.add_argument("--candidate-release-run", required=True)
     parser.add_argument("--trusted-ref", required=True)
     args = parser.parse_args()
     try:
         return execute(args)
     except (bg.Error, legacy.SafetyError, OSError, ValueError) as exc:
-        write_report({"schema": 1, "mode": args.mode, "run_id": args.run_id,
-                      "controller_commit": "unverified", "releases": {},
+        releases = {}
+        for color, path in (("blue", args.blue_manifest), ("green", args.candidate_manifest)):
+            try:
+                releases[color] = legacy.manifest(path)[0]
+            except (legacy.SafetyError, OSError, ValueError):
+                pass
+        try:
+            controller_commit = run("git", "rev-parse", "HEAD")
+        except bg.Error:
+            controller_commit = "unverified"
+        write_report({"schema": 1, "mode": args.mode,
+                      "run_id": args.run_id if re.fullmatch(r"[0-9]+-[0-9]+", args.run_id) else "unverified",
+                      "workflow_run": "unverified",
+                      "release_runs": {"blue": args.blue_release_run if args.blue_release_run.isdigit() else "unverified",
+                                       "green": args.candidate_release_run if args.candidate_release_run.isdigit() else "unverified"},
+                      "controller_commit": controller_commit, "releases": releases,
                       "tests": {"input validation": "FAIL"}, "promotion": "NOT_RUN",
                       "rollback": "NOT_RUN", "schema_compatibility": "NOT_RUN",
                       "error": str(exc)}, Path(args.report_dir))

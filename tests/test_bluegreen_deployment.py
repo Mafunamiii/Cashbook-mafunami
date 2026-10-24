@@ -19,7 +19,7 @@ class BlueGreenSafetyTests(unittest.TestCase):
         self.env = self.root / ".env.bluegreen.staging"
         self.env.write_text("STAGING_ISOLATED=1\nPOSTGRES_DB=namicash_stage\n"
                             "POSTGRES_USER=stage\nPOSTGRES_PASSWORD=stage_synthetic\n"
-                            "DATABASE_URL=postgresql://stage:stage_synthetic@db:5432/namicash_stage\n"
+                            "DATABASE_URL=postgresql+psycopg://stage:stage_synthetic@db:5432/namicash_stage\n"
                             "FRONTEND_ORIGIN=https://stage.namicash.invalid\n"
                             "TRUSTED_HOSTS=stage.namicash.invalid\nFORWARDED_ALLOW_IPS=127.0.0.1\n"
                             "REGISTRATION_MODE=open\n")

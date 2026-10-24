@@ -126,8 +126,9 @@ jobs:
             --env-file "$RUNNER_TEMP/namicash-staging.env" \
             --state-dir "$RUNNER_TEMP/namicash-bluegreen-state" \
             --report-dir "$RUNNER_TEMP/namicash-staging-report" \
-            --run-id "$RUN_ID" --trusted-ref "$REF"
-      - name: Upload staging evidence and failure logs
+            --run-id "$RUN_ID" --blue-release-run "$BLUE_RUN" \
+            --candidate-release-run "$GREEN_RUN" --trusted-ref "$REF"
+      - name: Upload staging evidence and safe diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

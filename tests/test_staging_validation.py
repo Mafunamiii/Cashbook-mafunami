@@ -28,7 +28,7 @@ class StagingTests(unittest.TestCase):
                                     for s, repo in release.REPOS.items()}}
         self.env = self.root / "stage.env"
         self.env.write_text("STAGING_ISOLATED=1\nPOSTGRES_DB=namicash_stage\nPOSTGRES_USER=stage\n"
-                            "POSTGRES_PASSWORD=stage_test\nDATABASE_URL=postgresql://stage:stage_test@db:5432/namicash_stage\n"
+                            "POSTGRES_PASSWORD=stage_test\nDATABASE_URL=postgresql+psycopg://stage:stage_test@db:5432/namicash_stage\n"
                             "REGISTRATION_MODE=open\n")
         self.controller = bg.Controller(SimpleNamespace(mode="staging", state_dir=str(self.root / "state"),
                             env_file=str(self.env), managed_dir=None, gateway_file=None,
@@ -93,6 +93,42 @@ class StagingTests(unittest.TestCase):
         with self.assertRaisesRegex(bg.Error, "credentials"):
             self.controller.env_guard()
 
+    def test_database_driver_and_credentials_checked_before_docker(self):
+        valid = self.env.read_text()
+        for url in (
+            "postgresql://stage:stage_test@db:5432/namicash_stage",
+            "postgresql+psycopg2://stage:stage_test@db:5432/namicash_stage",
+            "postgresql+psycopg://stage:wrong_secret@db:5432/namicash_stage",
+            "postgresql+psycopg://stage:stage_test@other:5432/namicash_stage",
+        ):
+            with self.subTest(url=url), patch.object(bg, "safe_run") as docker:
+                self.env.write_text(valid.replace(
+                    "postgresql+psycopg://stage:stage_test@db:5432/namicash_stage", url))
+                with self.assertRaisesRegex(bg.Error, "staging database URL") as caught:
+                    self.controller.staging_migrate(self.refs["backend"])
+                self.assertNotIn("wrong_secret", str(caught.exception))
+                docker.assert_not_called()
+        for extra in ("POSTGRES_PASSWORD=stage_other\n", "POSTGRES_DB=other\n",
+                      "POSTGRES_USER=other\n", "DATABASE_URL=postgresql://stage:stage_test@db:5432/namicash_stage\n"):
+            with self.subTest(extra=extra), patch.object(bg, "safe_run") as docker:
+                self.env.write_text(valid + extra)
+                with self.assertRaises(bg.Error):
+                    self.controller.staging_migrate(self.refs["backend"])
+                docker.assert_not_called()
+
+    def test_staging_diagnostics_identify_operation_without_docker_output(self):
+        secret = "stage_sensitive_token"
+        for args, label in (
+            (["docker", "run", "--entrypoint", "alembic", "image", "upgrade", "head"], "staging migration"),
+            (["docker", "exec", "gateway", "caddy", "reload"], "Caddy reload"),
+            (["docker", "compose", "up", "backend"], "container up backend"),
+        ):
+            with self.subTest(label=label), patch.object(bg.legacy.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=1, stdout=secret, stderr=f"DATABASE_URL={secret}")):
+                with self.assertRaisesRegex(bg.Error, label) as caught:
+                    bg.safe_run(args)
+                self.assertNotIn(secret, str(caught.exception))
+
     def test_staging_compose_ignores_inherited_production_values(self):
         with patch.dict(os.environ, {"POSTGRES_DB": "production", "POSTGRES_PASSWORD": "production-secret",
                                     "DATABASE_URL": "postgresql://prod@production/db",
@@ -101,7 +137,7 @@ class StagingTests(unittest.TestCase):
         self.assertEqual(env["POSTGRES_DB"], "namicash_stage")
         self.assertEqual(env["POSTGRES_PASSWORD"], "stage_test")
         self.assertEqual(env["DATABASE_URL"],
-                         "postgresql://stage:stage_test@db:5432/namicash_stage")
+                         "postgresql+psycopg://stage:stage_test@db:5432/namicash_stage")
         self.assertEqual(env["SENTRY_BACKEND_DSN"], "")
 
     def test_staging_migration_never_runs_in_production(self):
@@ -142,6 +178,25 @@ class StagingTests(unittest.TestCase):
         report["completed_at"] = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=4)).isoformat()
         with self.assertRaisesRegex(evidence.EvidenceError, "stale"):
             evidence.validate_report(report, blue=self.manifest, green=self.manifest, controller_sha="c" * 40)
+
+    def test_report_preserves_release_and_failure_evidence(self):
+        report = {"mode": "infrastructure", "run_id": "123-2",
+                  "workflow_run": "https://github.com/Mafunamiii/Cashbook-mafunami/actions/runs/123/attempts/2",
+                  "release_runs": {"blue": "45", "green": "45"},
+                  "controller_commit": "c" * 40,
+                  "releases": {"blue": self.manifest, "green": self.manifest},
+                  "tests": {"promotion and Green route": "FAIL", "scoped cleanup": "PASS"},
+                  "promotion": "NOT_RUN", "rollback": "NOT_RUN",
+                  "schema_compatibility": {"result": "PASS", "cross_version_tested": False},
+                  "error": "Caddy reload: docker exec failed (exit 1)"}
+        staging.write_report(report, self.root / "report")
+        saved = json.loads((self.root / "report/staging-report.json").read_text())
+        summary = (self.root / "report/staging-report.md").read_text()
+        self.assertEqual(saved["overall"], "FAIL")
+        self.assertFalse(saved["schema_compatibility"]["cross_version_tested"])
+        self.assertIn("selected run: 45", summary)
+        self.assertIn("Caddy reload", summary)
+        self.assertIn("Cleanup: PASS", summary)
 
     def test_schema_compatibility_requires_candidate_head(self):
         with patch.object(self.controller, "schema_revision", return_value="old"), \

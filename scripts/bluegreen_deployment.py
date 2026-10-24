@@ -69,7 +69,24 @@ def atomic(path, data):
 
 
 def safe_run(args, *, env=None):
-    return legacy.run(args, env=env)
+    try:
+        return legacy.run(args, env=env)
+    except legacy.SafetyError as exc:
+        # Docker may echo environment values. Only add labels derived from known
+        # subcommands; never include arguments or captured output.
+        if args[:2] == ["docker", "run"]:
+            operation = "staging migration" if "upgrade" in args and "head" in args else "image schema inspection"
+        elif args[:2] == ["docker", "compose"]:
+            action = next((word for word in ("up", "stop", "config") if word in args), "operation")
+            service = next((word for word in ("backend", "frontend", "db") if word in args), "stack")
+            operation = f"container {action} {service}"
+        elif args[:2] == ["docker", "exec"] and "caddy" in args:
+            operation = "Caddy reload" if "reload" in args else "Caddy validation"
+        elif args[:2] == ["docker", "pull"]:
+            operation = "image pull"
+        else:
+            operation = "Docker operation"
+        raise Error(f"{operation}: {exc}") from None
 
 
 class Controller:
@@ -226,14 +243,22 @@ class Controller:
             raw = self.env_file.read_bytes()
             need(not re.search(rb"^(?:PROD(?:UCTION)?_|CLOUDFLARE_|AWS_|GH_|GITHUB_TOKEN|SENTRY_BACKEND_DSN=\S)",
                                raw, re.MULTILINE), "production or external credentials in staging environment")
-            password = re.search(rb"^POSTGRES_PASSWORD=(stage_[^\r\n]+)$", raw, re.MULTILINE)
-            need(password and b"replace_with" not in password[1],
+            passwords = re.findall(rb"^POSTGRES_PASSWORD=(.*)$", raw, re.MULTILINE)
+            need(len(passwords) == 1 and re.fullmatch(rb"stage_[A-Za-z0-9_]+", passwords[0]) and
+                 b"replace_with" not in passwords[0],
                  "staging requires a distinct stage_ PostgreSQL credential")
-            need(re.search(rb"^STAGING_ISOLATED=1$", raw, re.MULTILINE) and
-                 re.search(rb"^POSTGRES_DB=namicash_stage$", raw, re.MULTILINE),
+            need(re.findall(rb"^STAGING_ISOLATED=(.*)$", raw, re.MULTILINE) == [b"1"] and
+                 re.findall(rb"^POSTGRES_DB=(.*)$", raw, re.MULTILINE) == [b"namicash_stage"] and
+                 re.findall(rb"^POSTGRES_USER=(.*)$", raw, re.MULTILINE) == [b"stage"],
                  "staging environment marker or database name missing")
             need(b"namicash_stage" in raw and b"@db:" in raw,
                  "staging database URL must target the isolated db alias")
+            url_values = re.findall(rb"^DATABASE_URL=(.*)$", raw, re.MULTILINE)
+            need(len(url_values) == 1, "staging requires one database URL")
+            expected_url = (b"postgresql+psycopg://stage:" + passwords[0] +
+                            b"@db:5432/namicash_stage")
+            need(url_values[0] == expected_url,
+                 "staging database URL requires psycopg v3 and isolated credentials")
             need(re.search(rb"^REGISTRATION_MODE=open$", raw, re.MULTILINE),
                  "staging must use synthetic open-registration mode")
         else:
