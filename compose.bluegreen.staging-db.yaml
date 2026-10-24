@@ -1,0 +1,28 @@
+# Disposable staging database. Never attach this network to production.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - staging-db:/var/lib/postgresql/data
+      - ./staging/synthetic.sql:/docker-entrypoint-initdb.d/001-synthetic.sql:ro
+    networks:
+      database:
+        aliases: [db]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    mem_limit: 512m
+    pids_limit: 128
+volumes:
+  staging-db:
+    name: namicash-bg-stage-postgres-data
+networks:
+  database:
+    external: true
+    name: namicash-bg-stage-database

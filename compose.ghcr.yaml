@@ -1,0 +1,71 @@
+# Explicit digest-only production model. Keep in sync with compose.production.yaml.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-production-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+  backend:
+    image: ${BACKEND_IMAGE:?Set digest-pinned BACKEND_IMAGE}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "${FORWARDED_ALLOW_IPS:?Set FORWARDED_ALLOW_IPS}"]
+    environment: &backend_environment
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      ENVIRONMENT: production
+      REGISTRATION_MODE: ${REGISTRATION_MODE:-invite_only}
+      INITIAL_INVITE_CODE: ${INITIAL_INVITE_CODE:-}
+      COOKIE_SECURE: "true"
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:?Set FRONTEND_ORIGIN in .env}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:?Set TRUSTED_HOSTS in .env}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:?Set FORWARDED_ALLOW_IPS in .env}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+      LOGIN_RATE_LIMIT_ATTEMPTS: ${LOGIN_RATE_LIMIT_ATTEMPTS:-5}
+      LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${LOGIN_RATE_LIMIT_WINDOW_SECONDS:-300}
+      SENTRY_DSN: ${SENTRY_BACKEND_DSN:-}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.05}
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"python","service":"cashbook-backend"}]'
+  frontend:
+    image: ${FRONTEND_IMAGE:?Set digest-pinned FRONTEND_IMAGE}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:8080"
+      - "${LAN_BIND_IP:?Set LAN_BIND_IP in .env}:${FRONTEND_PORT:-8080}:8080"
+      - "${TAILSCALE_BIND_IP:?Set TAILSCALE_BIND_IP in .env}:${FRONTEND_PORT:-8080}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"nginx","service":"cashbook-frontend"}]'
+volumes:
+  postgres-production-data:
+    name: cashbook-postgres-production-data
