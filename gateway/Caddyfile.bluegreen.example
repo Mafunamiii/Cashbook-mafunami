@@ -1,0 +1,9 @@
+# Future manually installed gateway configuration. Do not replace the live
+# standalone Caddyfile until the Blue transition checks in the runbook pass.
+{
+    admin unix//run/caddy-admin.sock
+    auto_https off
+}
+:8091 {
+    import /etc/caddy/managed/namicash.caddy
+}

@@ -1,0 +1,50 @@
+# Manual isolated staging smoke test. Requires a separate .env.staging.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+    volumes:
+      - staging-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    mem_limit: 512m
+  backend:
+    image: ${BACKEND_IMAGE:?}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "${FORWARDED_ALLOW_IPS:?Set FORWARDED_ALLOW_IPS}"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?}
+      ENVIRONMENT: production
+      REGISTRATION_MODE: open
+      COOKIE_SECURE: "true"
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:?}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:?}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:?}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+  frontend:
+    image: ${FRONTEND_IMAGE:?}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 256m
+volumes:
+  staging-postgres-data:
+    name: namicash-staging-postgres-data

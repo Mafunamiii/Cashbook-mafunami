@@ -1,0 +1,142 @@
+name: Off-host staging validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: infrastructure (same release) or release (current Blue and candidate Green)
+        type: choice
+        options: [infrastructure, release]
+        required: true
+      blue_release_run:
+        description: Successful Release images workflow run ID for Blue
+        required: true
+        type: string
+      candidate_release_run:
+        description: Successful Release images workflow run ID for Green
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: namicash-dedicated-staging
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      controller_sha: ${{ steps.check.outputs.controller_sha }}
+    steps:
+      - name: Validate trusted ref and immutable release runs
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          BLUE_RUN: ${{ inputs.blue_release_run }}
+          GREEN_RUN: ${{ inputs.candidate_release_run }}
+          MODE: ${{ inputs.mode }}
+          CONTROLLER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, subprocess, json
+          assert os.environ['REPOSITORY'] == 'Mafunamiii/Cashbook-mafunami'
+          assert os.environ['REF'] == 'refs/heads/main'
+          assert re.fullmatch(r'[0-9]+', os.environ['BLUE_RUN'])
+          assert re.fullmatch(r'[0-9]+', os.environ['GREEN_RUN'])
+          assert os.environ['MODE'] in ('infrastructure', 'release')
+          if os.environ['MODE'] == 'infrastructure':
+              assert os.environ['BLUE_RUN'] == os.environ['GREEN_RUN']
+          else:
+              assert os.environ['BLUE_RUN'] != os.environ['GREEN_RUN']
+          for key in ('BLUE_RUN', 'GREEN_RUN'):
+              data = json.loads(subprocess.check_output([
+                  'gh', 'api', f"repos/{os.environ['REPOSITORY']}/actions/runs/{os.environ[key]}"], text=True))
+              assert data['name'] == 'Release images'
+              assert data['path'] == '.github/workflows/release.yml'
+              assert data['event'] == 'push' and data['conclusion'] == 'success'
+              assert data['head_repository']['full_name'] == os.environ['REPOSITORY']
+              assert re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', data['head_branch'])
+          PY
+          echo "controller_sha=$CONTROLLER_SHA" >> "$GITHUB_OUTPUT"
+
+  rehearse:
+    needs: gate
+    if: github.repository == 'Mafunamiii/Cashbook-mafunami' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, namicash, legion-staging]
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BLUE_RUN: ${{ inputs.blue_release_run }}
+      GREEN_RUN: ${{ inputs.candidate_release_run }}
+      MODE: ${{ inputs.mode }}
+      RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Check out approved controller commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ needs.gate.outputs.controller_sha }}
+      - name: Verify checkout and release manifests
+        env:
+          CONTROLLER_SHA: ${{ needs.gate.outputs.controller_sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CONTROLLER_SHA"
+          mkdir -p "$RUNNER_TEMP/namicash-manifests/blue" "$RUNNER_TEMP/namicash-manifests/green"
+          gh run download "$BLUE_RUN" -R "$REPOSITORY" -p 'release-manifest-*' -D "$RUNNER_TEMP/namicash-manifests/blue"
+          gh run download "$GREEN_RUN" -R "$REPOSITORY" -p 'release-manifest-*' -D "$RUNNER_TEMP/namicash-manifests/green"
+          python3 scripts/staging_evidence.py validate-release-runs \
+            --repository "$REPOSITORY" --blue-run "$BLUE_RUN" --green-run "$GREEN_RUN" \
+            --blue-dir "$RUNNER_TEMP/namicash-manifests/blue" \
+            --green-dir "$RUNNER_TEMP/namicash-manifests/green" --mode "$MODE"
+      - name: Create staging-only credentials
+        run: |
+          set -euo pipefail
+          umask 077
+          password="stage_$(openssl rand -hex 24)"
+          sed "s/stage_replace_with_random_value/$password/g" staging/env.example > "$RUNNER_TEMP/namicash-staging.env"
+      - name: Authenticate to GHCR for read-only pulls
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/namicash-docker-config"
+          export DOCKER_CONFIG="$RUNNER_TEMP/namicash-docker-config"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/namicash-docker-config" >> "$GITHUB_ENV"
+          printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+      - name: Rehearse Blue to Green and rollback
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          python3 scripts/staging_validation.py --mode "$MODE" \
+            --blue-manifest "$RUNNER_TEMP/namicash-manifests/blue/release-manifest.json" \
+            --candidate-manifest "$RUNNER_TEMP/namicash-manifests/green/release-manifest.json" \
+            --env-file "$RUNNER_TEMP/namicash-staging.env" \
+            --state-dir "$RUNNER_TEMP/namicash-bluegreen-state" \
+            --report-dir "$RUNNER_TEMP/namicash-staging-report" \
+            --run-id "$RUN_ID" --trusted-ref "$REF"
+      - name: Upload staging evidence and failure logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: staging-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/namicash-staging-report/
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Remove runner credentials
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/namicash-staging.env"
+          rm -rf "$RUNNER_TEMP/namicash-docker-config"

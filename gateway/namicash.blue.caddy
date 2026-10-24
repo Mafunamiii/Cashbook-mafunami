@@ -1,0 +1,4 @@
+header X-Nami-Route blue
+reverse_proxy blue-frontend:8080 {
+    stream_close_delay 5m
+}

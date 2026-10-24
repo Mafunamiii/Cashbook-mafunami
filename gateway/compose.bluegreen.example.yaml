@@ -1,0 +1,18 @@
+# Reviewed future replacement for the standalone gateway Compose file.
+# Do not apply during implementation. Retains 127.0.0.1:8091 and container name.
+services:
+  caddy:
+    image: caddy:2
+    container_name: caddy-gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8091:8091"
+    volumes:
+      - /home/jahn/caddy-gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /home/jahn/caddy-gateway/managed:/etc/caddy/managed:ro
+    networks:
+      - gateway
+networks:
+  gateway:
+    external: true
+    name: namicash-gateway
