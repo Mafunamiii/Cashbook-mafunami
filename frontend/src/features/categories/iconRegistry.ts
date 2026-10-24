@@ -304,14 +304,17 @@ export function searchCategoryIcons(
   query: string,
   group?: IconGroup,
 ): CategoryIconDefinition[] {
-  const normalized = query.trim().toLocaleLowerCase();
+  const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   return CATEGORY_ICON_REGISTRY.filter((definition) => {
     if (group && definition.group !== group) return false;
-    if (!normalized) return true;
-    return [definition.key, definition.label, ...definition.keywords]
+    const searchable = [
+      definition.key,
+      definition.label,
+      ...definition.keywords,
+    ]
       .join(" ")
-      .toLocaleLowerCase()
-      .includes(normalized);
+      .toLocaleLowerCase();
+    return terms.every((term) => searchable.includes(term));
   });
 }
 

@@ -1,5 +1,27 @@
 # GHCR releases
 
+## v1.0.3 candidate
+
+Category icon search now matches all entered words regardless of order or extra
+whitespace. This changes only frontend filtering of the existing icon catalog;
+saved icon keys, API requests, backend behavior, and database schema are unchanged.
+The v1.0.2 backend can therefore serve the v1.0.3 frontend, and the v1.0.3
+backend image uses the same application and schema code as v1.0.2.
+Current `main` already differs from v1.0.2 in backend startup: its Dockerfile
+no longer runs Alembic automatically. The staging controller runs the candidate
+migration during preparation; this candidate does not change that behavior.
+
+For cross-version staging, use v1.0.2 release run `39545116208` as Blue, a
+successful v1.0.3 release run as Green, and `release` mode. The release workflow
+builds both images; only the frontend application content changes. Its OCI
+version, revision, and creation labels may also affect published image digests.
+
+Release-mode staging checks image and schema identities, container health, basic
+routes, promotion, and rollback against a synthetic database. Its schema check
+compares Alembic heads and confirms Blue stays healthy after candidate migration;
+it does not exercise authenticated user flows or prove compatibility for every
+stored data shape.
+
 ## Promote and tag
 
 Develop on `feature/*` branches and merge reviewed pull requests into `dev`.

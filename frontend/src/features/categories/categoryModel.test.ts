@@ -35,6 +35,13 @@ describe("category model", () => {
     expect(searchCategoryIcons("money", "Health")).toHaveLength(0);
   });
 
+  it("matches search words in any order with extra whitespace", () => {
+    expect(
+      searchCategoryIcons(" restaurant   food ").map((icon) => icon.key),
+    ).toContain("utensils");
+    expect(searchCategoryIcons("food restaurant", "Finance")).toHaveLength(0);
+  });
+
   it("resolves Lucide keys while leaving legacy values to the fallback", () => {
     expect(findCategoryIcon("utensils")?.label).toBe("Utensils");
     expect(findCategoryIcon("🐾")).toBeNull();
