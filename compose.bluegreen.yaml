@@ -1,0 +1,67 @@
+# One candidate color per Compose project: namicash-blue or namicash-green.
+# No database service, published ports, build, or migration profile.
+services:
+  backend:
+    image: ${BACKEND_IMAGE:?immutable backend digest required}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "${FORWARDED_ALLOW_IPS:?required}"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?required}
+      ENVIRONMENT: production
+      REGISTRATION_MODE: ${REGISTRATION_MODE:-invite_only}
+      INITIAL_INVITE_CODE: ${INITIAL_INVITE_CODE:-}
+      COOKIE_SECURE: "true"
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:?required}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:?required}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:?required}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+      LOGIN_RATE_LIMIT_ATTEMPTS: ${LOGIN_RATE_LIMIT_ATTEMPTS:-5}
+      LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${LOGIN_RATE_LIMIT_WINDOW_SECONDS:-300}
+      SENTRY_DSN: ${SENTRY_BACKEND_DSN:-}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.05}
+    networks:
+      app:
+        aliases: ["${BG_COLOR:?}-api"]
+      database: {}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8000/ready', headers={'Host': '${BG_PROBE_HOST:?required}'}), timeout=2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    mem_limit: 512m
+    pids_limit: 256
+    restart: unless-stopped
+  frontend:
+    image: ${FRONTEND_IMAGE:?immutable frontend digest required}
+    volumes:
+      - type: bind
+        source: ${FRONTEND_NGINX_CONF:?color-specific nginx configuration required}
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+    networks:
+      app: {}
+      gateway:
+        aliases: ["${BG_COLOR:?}-frontend"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "--header", "Host: ${BG_PROBE_HOST:?required}", "http://127.0.0.1:8080/api/v1/auth/recovery-info"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 256m
+    pids_limit: 128
+    restart: unless-stopped
+networks:
+  app:
+    internal: true
+  database:
+    external: true
+    name: ${BG_DB_NETWORK:?dedicated database network required}
+  gateway:
+    external: true
+    name: ${BG_GATEWAY_NETWORK:?dedicated gateway network required}
